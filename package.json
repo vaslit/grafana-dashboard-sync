@@ -396,7 +396,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "tsc --noEmit -p ./",
-    "test": "npm run compile && node --test ./out/test/**/*.test.js",
+    "test": "npm run compile && node --test ./out/test/*.test.js",
     "package": "vsce package",
     "publish:marketplace": "vsce publish"
   },
