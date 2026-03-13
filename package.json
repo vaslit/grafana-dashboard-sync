@@ -303,6 +303,16 @@
           "group": "inline@2"
         },
         {
+          "command": "grafanaDashboards.pullDashboard",
+          "when": "view == grafanaDashboards.instances && (viewItem == grafanaInstance || viewItem == grafanaDeploymentTarget || viewItem == grafanaInstanceDashboard)",
+          "group": "inline@1"
+        },
+        {
+          "command": "grafanaDashboards.deployDashboard",
+          "when": "view == grafanaDashboards.instances && (viewItem == grafanaInstance || viewItem == grafanaDeploymentTarget || viewItem == grafanaInstanceDashboard)",
+          "group": "inline@2"
+        },
+        {
           "command": "grafanaDashboards.openDashboardJson",
           "when": "view == grafanaDashboards.dashboards && viewItem == grafanaDashboard",
           "group": "navigation"
@@ -363,24 +373,49 @@
           "group": "navigation@5"
         },
         {
-          "command": "grafanaDashboards.pullAllDashboards",
+          "command": "grafanaDashboards.deployDashboard",
           "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
           "group": "navigation@6"
         },
         {
           "command": "grafanaDashboards.renderInstance",
           "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
-          "group": "navigation@6.5"
+          "group": "navigation@7"
         },
         {
           "command": "grafanaDashboards.clearInstanceToken",
           "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
-          "group": "navigation@7"
+          "group": "navigation@8"
         },
         {
           "command": "grafanaDashboards.removeInstance",
           "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
-          "group": "navigation@8"
+          "group": "navigation@9"
+        },
+        {
+          "command": "grafanaDashboards.openDashboardJson",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstanceDashboard",
+          "group": "navigation"
+        },
+        {
+          "command": "grafanaDashboards.pullDashboard",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstanceDashboard",
+          "group": "navigation@1"
+        },
+        {
+          "command": "grafanaDashboards.deployDashboard",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstanceDashboard",
+          "group": "navigation@2"
+        },
+        {
+          "command": "grafanaDashboards.renderDashboard",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstanceDashboard",
+          "group": "navigation@3"
+        },
+        {
+          "command": "grafanaDashboards.pullDashboard",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaDeploymentTarget",
+          "group": "navigation@8.5"
         },
         {
           "command": "grafanaDashboards.deployDashboard",

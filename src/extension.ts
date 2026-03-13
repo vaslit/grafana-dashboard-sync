@@ -26,7 +26,12 @@ import {
 } from "./ui/dashboardTreeProvider";
 import { DetailsViewProvider } from "./ui/detailsViewProvider";
 import { FolderPickerPanel } from "./ui/folderPickerPanel";
-import { DeploymentTargetTreeItem, InstanceTreeItem, InstanceTreeProvider } from "./ui/instanceTreeProvider";
+import {
+  DeploymentTargetTreeItem,
+  InstanceTargetDashboardTreeItem,
+  InstanceTreeItem,
+  InstanceTreeProvider,
+} from "./ui/instanceTreeProvider";
 import { SelectionState } from "./ui/selectionState";
 
 function workspaceRootPath(): string {
@@ -236,7 +241,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   await resolveProject();
 
   const dashboardsProvider = new DashboardTreeProvider(() => repository, missingProjectMessage);
-  const instancesProvider = new InstanceTreeProvider(() => repository, selectionState, missingProjectMessage);
+  const instancesProvider = new InstanceTreeProvider(() => repository, missingProjectMessage);
   const backupsProvider = new BackupTreeProvider(() => repository, missingProjectMessage);
 
   const dashboardTreeView = vscode.window.createTreeView("grafanaDashboards.dashboards", {
@@ -955,6 +960,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       selectionState.setInstance(item.target.instanceName);
       selectionState.setTarget(item.target.name);
       void detailsProvider.refresh();
+    } else if (item instanceof InstanceTargetDashboardTreeItem) {
+      selectionState.setDashboard(item.record.selectorName);
+      selectionState.setInstance(item.target.instanceName);
+      selectionState.setTarget(item.target.name);
+      void detailsProvider.refresh();
     }
   });
 
@@ -1034,15 +1044,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("grafanaDashboards.clearInstanceToken", (item?: InstanceTreeItem) =>
       clearInstanceToken(item),
     ),
-    vscode.commands.registerCommand("grafanaDashboards.openDashboardJson", (item?: DashboardTreeItem) =>
+    vscode.commands.registerCommand("grafanaDashboards.openDashboardJson", (item?: DashboardTreeItem | InstanceTargetDashboardTreeItem) =>
       openDashboardJson(item),
     ),
-    vscode.commands.registerCommand("grafanaDashboards.removeDashboard", (item?: DashboardTreeItem) =>
+    vscode.commands.registerCommand("grafanaDashboards.removeDashboard", (item?: DashboardTreeItem | InstanceTargetDashboardTreeItem) =>
       removeDashboard(item),
     ),
     vscode.commands.registerCommand(
       "grafanaDashboards.pullDashboard",
-      (item?: DashboardTreeItem | DashboardInstanceTreeItem | DashboardTargetTreeItem | InstanceTreeItem | DeploymentTargetTreeItem) =>
+      (item?: DashboardTreeItem | DashboardInstanceTreeItem | DashboardTargetTreeItem | InstanceTreeItem | DeploymentTargetTreeItem | InstanceTargetDashboardTreeItem) =>
       pullDashboards(item),
     ),
     vscode.commands.registerCommand("grafanaDashboards.pullAllDashboards", (item?: InstanceTreeItem | DeploymentTargetTreeItem) =>
@@ -1050,7 +1060,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand(
       "grafanaDashboards.renderDashboard",
-      (item?: DashboardTreeItem | DashboardInstanceTreeItem | DashboardTargetTreeItem) =>
+      (item?: DashboardTreeItem | DashboardInstanceTreeItem | DashboardTargetTreeItem | InstanceTargetDashboardTreeItem) =>
       renderDashboardCommand(item),
     ),
     vscode.commands.registerCommand("grafanaDashboards.renderTarget", (item?: DeploymentTargetTreeItem) =>
@@ -1067,7 +1077,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand(
       "grafanaDashboards.deployDashboard",
-      (item?: DashboardTreeItem | DashboardInstanceTreeItem | DashboardTargetTreeItem | InstanceTreeItem | DeploymentTargetTreeItem) =>
+      (item?: DashboardTreeItem | DashboardInstanceTreeItem | DashboardTargetTreeItem | InstanceTreeItem | DeploymentTargetTreeItem | InstanceTargetDashboardTreeItem) =>
       deployDashboards(item),
     ),
     vscode.commands.registerCommand("grafanaDashboards.openOverrideFile", (item?: InstanceTreeItem | DeploymentTargetTreeItem) =>
@@ -1147,6 +1157,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return item instanceof DashboardTreeItem || item instanceof DashboardInstanceTreeItem || item instanceof DashboardTargetTreeItem;
   }
 
+  function isInstanceTargetDashboardItem(item: unknown): item is InstanceTargetDashboardTreeItem {
+    return item instanceof InstanceTargetDashboardTreeItem;
+  }
+
   async function dashboardScopeContext(
     item: DashboardTreeItem | DashboardInstanceTreeItem | DashboardTargetTreeItem,
   ): Promise<{
@@ -1221,7 +1235,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   async function pickDashboardEntries(
-    item?: DashboardTreeItem | DashboardInstanceTreeItem | DashboardTargetTreeItem,
+    item?: DashboardTreeItem | DashboardInstanceTreeItem | DashboardTargetTreeItem | InstanceTargetDashboardTreeItem,
   ): Promise<DashboardManifestEntry[]> {
     const repository = requireRepository();
     if (item) {
@@ -1258,6 +1272,40 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     return picks.map((pick) => pick.record.entry);
+  }
+
+  async function allDashboardEntries(): Promise<DashboardManifestEntry[]> {
+    const repository = requireRepository();
+    const records = await repository.listDashboardRecords();
+    if (records.length === 0) {
+      throw new Error("No dashboards available in the manifest.");
+    }
+    return records.map((record) => record.entry);
+  }
+
+  async function pickTargetForInstance(instanceName: string): Promise<DeploymentTargetRecord> {
+    const repository = requireRepository();
+    const targets = await repository.listDeploymentTargets(instanceName);
+    if (targets.length === 0) {
+      throw new Error(`No deployment targets found for ${instanceName}.`);
+    }
+
+    const selection = await vscode.window.showQuickPick(
+      targets.map((target) => ({
+        label: `${target.instanceName}/${target.name}`,
+        target,
+      })),
+      {
+        title: `Choose source target in ${instanceName}`,
+        placeHolder: "Pull should use one concrete Grafana target as the source of truth",
+      },
+    );
+
+    if (!selection) {
+      throw new Error("No source target selected.");
+    }
+
+    return selection.target;
   }
 
   async function pickInstanceIfNeeded(explicitInstanceName?: string): Promise<InstanceRecord | undefined> {
@@ -1343,12 +1391,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await vscode.window.showTextDocument(document, { preview: false });
   }
 
-  async function openDashboardJson(item?: DashboardTreeItem): Promise<void> {
+  async function openDashboardJson(item?: DashboardTreeItem | InstanceTargetDashboardTreeItem): Promise<void> {
     const record = item?.record ?? (await requireDashboardRecord());
     await openFile(record.absolutePath);
   }
 
-  async function removeDashboard(item?: DashboardTreeItem): Promise<void> {
+  async function removeDashboard(item?: DashboardTreeItem | InstanceTargetDashboardTreeItem): Promise<void> {
     const selectorName = item?.record.selectorName ?? selectionState.selectedDashboardSelectorName;
     if (!selectorName) {
       throw new Error("Select a dashboard first.");
@@ -1358,7 +1406,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   async function pullDashboards(
-    item?: DashboardTreeItem | DashboardInstanceTreeItem | DashboardTargetTreeItem | InstanceTreeItem | DeploymentTargetTreeItem,
+    item?:
+      | DashboardTreeItem
+      | DashboardInstanceTreeItem
+      | DashboardTargetTreeItem
+      | InstanceTreeItem
+      | DeploymentTargetTreeItem
+      | InstanceTargetDashboardTreeItem,
   ): Promise<void> {
     const service = requireService();
     if (isDashboardScopeItem(item)) {
@@ -1384,12 +1438,38 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return;
     }
 
-    const explicitDashboardItem = item instanceof DashboardTreeItem ? item : undefined;
-    const explicitInstanceName =
-      item instanceof InstanceTreeItem ? item.instance.name : item instanceof DeploymentTargetTreeItem ? item.target.instanceName : undefined;
-    const explicitTargetName = item instanceof DeploymentTargetTreeItem ? item.target.name : undefined;
-    const entries = await pickDashboardEntries(explicitDashboardItem);
-    const target = await pickRequiredDeploymentTarget(explicitInstanceName, explicitTargetName);
+    if (isInstanceTargetDashboardItem(item)) {
+      const summary = await service.pullDashboards([item.record.entry], item.target.instanceName, item.target.name);
+      await refreshAll();
+      void vscode.window.showInformationMessage(
+        `Pull complete for ${item.record.selectorName} from ${item.target.instanceName}/${item.target.name}: ${summary.updatedCount} updated, ${summary.skippedCount} unchanged.`,
+      );
+      return;
+    }
+
+    if (item instanceof InstanceTreeItem) {
+      const target = await pickTargetForInstance(item.instance.name);
+      const entries = await allDashboardEntries();
+      const summary = await service.pullDashboards(entries, target.instanceName, target.name);
+      await refreshAll();
+      void vscode.window.showInformationMessage(
+        `Pull complete for all dashboards from ${target.instanceName}/${target.name}: ${summary.updatedCount} updated, ${summary.skippedCount} unchanged.`,
+      );
+      return;
+    }
+
+    if (item instanceof DeploymentTargetTreeItem) {
+      const entries = await allDashboardEntries();
+      const summary = await service.pullDashboards(entries, item.target.instanceName, item.target.name);
+      await refreshAll();
+      void vscode.window.showInformationMessage(
+        `Pull complete for all dashboards from ${item.target.instanceName}/${item.target.name}: ${summary.updatedCount} updated, ${summary.skippedCount} unchanged.`,
+      );
+      return;
+    }
+
+    const entries = await pickDashboardEntries();
+    const target = await pickRequiredDeploymentTarget();
     const summary = await service.pullDashboards(entries, target.instanceName, target.name);
     await refreshAll();
     void vscode.window.showInformationMessage(
@@ -1398,9 +1478,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   async function renderDashboardCommand(
-    item?: DashboardTreeItem | DashboardInstanceTreeItem | DashboardTargetTreeItem,
+    item?: DashboardTreeItem | DashboardInstanceTreeItem | DashboardTargetTreeItem | InstanceTargetDashboardTreeItem,
   ): Promise<void> {
     const service = requireService();
+    if (isInstanceTargetDashboardItem(item)) {
+      await service.renderDashboards([item.record.entry], item.target.instanceName, item.target.name, "dashboard");
+      await refreshAll();
+      void vscode.window.showInformationMessage(
+        `Render complete for ${item.record.selectorName} on ${item.target.instanceName}/${item.target.name}.`,
+      );
+      return;
+    }
+
     if (item) {
       const { record, targets, label } = await dashboardScopeContext(item);
 
@@ -1441,14 +1530,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   async function pullAllDashboards(item?: InstanceTreeItem | DeploymentTargetTreeItem): Promise<void> {
-    const instanceName =
-      item instanceof InstanceTreeItem ? item.instance.name : item instanceof DeploymentTargetTreeItem ? item.target.instanceName : undefined;
+    if (item instanceof InstanceTreeItem) {
+      const target = await pickTargetForInstance(item.instance.name);
+      await actionHandlers.pullAllDashboards(target.instanceName, target.name);
+      return;
+    }
+
+    const instanceName = item instanceof DeploymentTargetTreeItem ? item.target.instanceName : undefined;
     const targetName = item instanceof DeploymentTargetTreeItem ? item.target.name : undefined;
     await actionHandlers.pullAllDashboards(instanceName, targetName);
   }
 
   async function deployDashboards(
-    item?: DashboardTreeItem | DashboardInstanceTreeItem | DashboardTargetTreeItem | InstanceTreeItem | DeploymentTargetTreeItem,
+    item?:
+      | DashboardTreeItem
+      | DashboardInstanceTreeItem
+      | DashboardTargetTreeItem
+      | InstanceTreeItem
+      | DeploymentTargetTreeItem
+      | InstanceTargetDashboardTreeItem,
   ): Promise<void> {
     const service = requireService();
     if (isDashboardScopeItem(item)) {
@@ -1467,12 +1567,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return;
     }
 
-    const explicitDashboardItem = item instanceof DashboardTreeItem ? item : undefined;
-    const explicitInstanceName =
-      item instanceof InstanceTreeItem ? item.instance.name : item instanceof DeploymentTargetTreeItem ? item.target.instanceName : undefined;
-    const explicitTargetName = item instanceof DeploymentTargetTreeItem ? item.target.name : undefined;
-    const entries = await pickDashboardEntries(explicitDashboardItem);
-    const target = await pickRequiredDeploymentTarget(explicitInstanceName, explicitTargetName);
+    if (isInstanceTargetDashboardItem(item)) {
+      const summary = await service.deployDashboards([item.record.entry], item.target.instanceName, item.target.name);
+      await refreshAll();
+      void vscode.window.showInformationMessage(
+        `Deploy complete for ${item.record.selectorName} to ${item.target.instanceName}/${item.target.name}: ${summary.dashboardResults.length} dashboard(s) deployed.`,
+      );
+      return;
+    }
+
+    if (item instanceof InstanceTreeItem) {
+      const entries = await allDashboardEntries();
+      const targets = await requireRepository().listDeploymentTargets(item.instance.name);
+      let deployedCount = 0;
+      for (const target of targets) {
+        const summary = await service.deployDashboards(entries, target.instanceName, target.name);
+        deployedCount += summary.dashboardResults.length;
+      }
+      await refreshAll();
+      void vscode.window.showInformationMessage(
+        `Deploy complete for all dashboards in ${item.instance.name}: ${deployedCount} deployment(s) across ${targets.length} target(s).`,
+      );
+      return;
+    }
+
+    if (item instanceof DeploymentTargetTreeItem) {
+      const entries = await allDashboardEntries();
+      const summary = await service.deployDashboards(entries, item.target.instanceName, item.target.name);
+      await refreshAll();
+      void vscode.window.showInformationMessage(
+        `Deploy complete for all dashboards to ${item.target.instanceName}/${item.target.name}: ${summary.dashboardResults.length} dashboard(s) deployed.`,
+      );
+      return;
+    }
+
+    const entries = await pickDashboardEntries();
+    const target = await pickRequiredDeploymentTarget();
     const summary = await service.deployDashboards(entries, target.instanceName, target.name);
     await refreshAll();
     void vscode.window.showInformationMessage(

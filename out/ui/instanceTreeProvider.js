@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.InstanceTreeProvider = exports.DeploymentTargetTreeItem = exports.InstanceTreeItem = void 0;
+exports.InstanceTreeProvider = exports.InstanceTargetDashboardTreeItem = exports.DeploymentTargetTreeItem = exports.InstanceTreeItem = void 0;
 const vscode = __importStar(require("vscode"));
 const repository_1 = require("../core/repository");
 class InstanceTreeItem extends vscode.TreeItem {
@@ -60,29 +60,45 @@ class InstanceTreeItem extends vscode.TreeItem {
 exports.InstanceTreeItem = InstanceTreeItem;
 class DeploymentTargetTreeItem extends vscode.TreeItem {
     target;
-    overrideExists;
-    folderOverrideExists;
-    constructor(target, overrideExists, folderOverrideExists) {
-        super(target.name, vscode.TreeItemCollapsibleState.None);
+    dashboardCount;
+    constructor(target, dashboardCount) {
+        super(target.name, dashboardCount > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
         this.target = target;
-        this.overrideExists = overrideExists;
-        this.folderOverrideExists = folderOverrideExists;
+        this.dashboardCount = dashboardCount;
         this.contextValue = "grafanaDeploymentTarget";
         this.description = [
             target.name === repository_1.DEFAULT_DEPLOYMENT_TARGET ? "default" : "target",
-            overrideExists ? "override" : "no override",
-            folderOverrideExists ? "folder override" : "base folder",
+            `${dashboardCount} dashboard${dashboardCount === 1 ? "" : "s"}`,
         ].join(", ");
         this.tooltip = new vscode.MarkdownString([
             `**${target.instanceName}/${target.name}**`,
             "",
-            `Override for current dashboard: ${overrideExists ? "present" : "missing"}`,
-            `Folder override for current dashboard: ${folderOverrideExists ? "present" : "missing"}`,
+            `Dashboards: ${dashboardCount}`,
         ].join("\n"));
         this.iconPath = new vscode.ThemeIcon(target.name === repository_1.DEFAULT_DEPLOYMENT_TARGET ? "target" : "symbol-field");
     }
 }
 exports.DeploymentTargetTreeItem = DeploymentTargetTreeItem;
+class InstanceTargetDashboardTreeItem extends vscode.TreeItem {
+    target;
+    record;
+    constructor(target, record) {
+        super(record.selectorName, vscode.TreeItemCollapsibleState.None);
+        this.target = target;
+        this.record = record;
+        this.contextValue = "grafanaInstanceDashboard";
+        this.description = record.exists ? record.title ?? record.entry.uid : "Missing local file";
+        this.tooltip = new vscode.MarkdownString([
+            `**${record.selectorName} -> ${target.instanceName}/${target.name}**`,
+            "",
+            `UID: \`${record.entry.uid}\``,
+            `Path: \`${record.entry.path}\``,
+            record.exists ? `Local file: \`${record.absolutePath}\`` : "Local file is missing.",
+        ].join("\n"));
+        this.iconPath = new vscode.ThemeIcon(record.exists ? "file-code" : "warning");
+    }
+}
+exports.InstanceTargetDashboardTreeItem = InstanceTargetDashboardTreeItem;
 class InstancePlaceholderItem extends vscode.TreeItem {
     constructor(label, command) {
         super(label, vscode.TreeItemCollapsibleState.None);
@@ -93,13 +109,11 @@ class InstancePlaceholderItem extends vscode.TreeItem {
 }
 class InstanceTreeProvider {
     getRepository;
-    selectionState;
     getMissingProjectMessage;
     changeEmitter = new vscode.EventEmitter();
     onDidChangeTreeData = this.changeEmitter.event;
-    constructor(getRepository, selectionState, getMissingProjectMessage) {
+    constructor(getRepository, getMissingProjectMessage) {
         this.getRepository = getRepository;
-        this.selectionState = selectionState;
         this.getMissingProjectMessage = getMissingProjectMessage;
     }
     refresh() {
@@ -121,6 +135,9 @@ class InstanceTreeProvider {
         try {
             if (element instanceof InstanceTreeItem) {
                 return this.instanceChildren(repository, element.instance);
+            }
+            if (element instanceof DeploymentTargetTreeItem) {
+                return this.targetChildren(repository, element.target);
             }
             const instances = await repository.listInstances();
             if (instances.length === 0) {
@@ -151,23 +168,20 @@ class InstanceTreeProvider {
                 }),
             ];
         }
-        const selectedDashboard = await this.selectedDashboardRecord();
-        return Promise.all(targets.map(async (target) => {
-            const overrideFile = selectedDashboard
-                ? await repository.readTargetOverrideFile(instance.name, target.name, selectedDashboard.entry)
-                : undefined;
-            return new DeploymentTargetTreeItem(target, Boolean(overrideFile && Object.keys(overrideFile.variables ?? {}).length > 0), Boolean(overrideFile?.folderPath?.trim()));
-        }));
+        const records = await repository.listDashboardRecords();
+        return targets.map((target) => new DeploymentTargetTreeItem(target, records.length));
     }
-    async selectedDashboardRecord() {
-        const repository = this.getRepository();
-        if (!repository) {
-            return undefined;
+    async targetChildren(repository, target) {
+        const records = await repository.listDashboardRecords();
+        if (records.length === 0) {
+            return [
+                new InstancePlaceholderItem("Manifest is empty. Add a dashboard.", {
+                    command: "grafanaDashboards.addDashboard",
+                    title: "Add Dashboard",
+                }),
+            ];
         }
-        if (!this.selectionState.selectedDashboardSelectorName) {
-            return undefined;
-        }
-        return repository.dashboardRecordBySelector(this.selectionState.selectedDashboardSelectorName);
+        return records.map((record) => new InstanceTargetDashboardTreeItem(target, record));
     }
 }
 exports.InstanceTreeProvider = InstanceTreeProvider;
