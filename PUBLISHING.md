@@ -2,8 +2,8 @@
 
 This repository is prepared for a public release under these defaults:
 
-- GitHub repository: `vase/grafana-dashboard-sync`
-- VS Code Marketplace publisher: `vase`
+- GitHub repository: `vaslit/grafana-dashboard-sync`
+- VS Code Marketplace publisher: `vaslit`
 - Extension version: `0.7.0`
 
 If your actual GitHub owner or Marketplace publisher differs, update [package.json](/home/vase/Projects/grafana-dashboard-sync/package.json) before publishing.
@@ -21,7 +21,7 @@ git push -u origin main --tags
 Current remote:
 
 ```text
-git@github.com:vase/grafana-dashboard-sync.git
+git@github.com:vaslit/grafana-dashboard-sync.git
 ```
 
 ## Visual Studio Marketplace
