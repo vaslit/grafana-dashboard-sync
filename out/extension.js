@@ -934,6 +934,27 @@ async function activate(context) {
             label: `${item.record.selectorName} across all instances`,
         };
     }
+    async function pickDashboardSourceTarget(item) {
+        const { record, targets } = await dashboardScopeContext(item);
+        const selection = await vscode.window.showQuickPick(targets.map((target) => ({
+            label: `${target.instanceName}/${target.name}`,
+            description: target.defaultsExists ? "Target defaults present" : "Target defaults missing",
+            target,
+        })), {
+            title: item instanceof dashboardTreeProvider_1.DashboardInstanceTreeItem
+                ? `Choose source target for ${record.selectorName} in ${item.instance.name}`
+                : `Choose source target for ${record.selectorName}`,
+            placeHolder: "Pull should use one concrete Grafana target as the source of truth",
+        });
+        if (!selection) {
+            throw new Error("No source target selected.");
+        }
+        return {
+            record,
+            target: selection.target,
+            label: `${record.selectorName} from ${selection.target.instanceName}/${selection.target.name}`,
+        };
+    }
     async function pickDashboardEntries(item) {
         const repository = requireRepository();
         if (item) {
@@ -1038,16 +1059,16 @@ async function activate(context) {
     async function pullDashboards(item) {
         const service = requireService();
         if (isDashboardScopeItem(item)) {
-            const { record, targets, label } = await dashboardScopeContext(item);
-            let updatedCount = 0;
-            let skippedCount = 0;
-            for (const target of targets) {
-                const summary = await service.pullDashboards([record.entry], target.instanceName, target.name);
-                updatedCount += summary.updatedCount;
-                skippedCount += summary.skippedCount;
-            }
+            const scopedTarget = item instanceof dashboardTreeProvider_1.DashboardTargetTreeItem
+                ? {
+                    record: item.record,
+                    target: item.target,
+                    label: `${item.record.selectorName} from ${item.target.instanceName}/${item.target.name}`,
+                }
+                : await pickDashboardSourceTarget(item);
+            const summary = await service.pullDashboards([scopedTarget.record.entry], scopedTarget.target.instanceName, scopedTarget.target.name);
             await refreshAll();
-            void vscode.window.showInformationMessage(`Pull complete for ${label}: ${updatedCount} updated, ${skippedCount} unchanged across ${targets.length} target(s).`);
+            void vscode.window.showInformationMessage(`Pull complete for ${scopedTarget.label}: ${summary.updatedCount} updated, ${summary.skippedCount} unchanged.`);
             return;
         }
         const explicitDashboardItem = item instanceof dashboardTreeProvider_1.DashboardTreeItem ? item : undefined;

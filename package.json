@@ -158,7 +158,7 @@
       },
       {
         "command": "grafanaDashboards.pullDashboard",
-        "title": "Pull Dashboard",
+        "title": "Pull Dashboard From Target",
         "icon": {
           "light": "media/pull-light.svg",
           "dark": "media/pull-dark.svg"
