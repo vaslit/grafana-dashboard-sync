@@ -1,0 +1,179 @@
+# Grafana Dashboard Sync
+
+`Grafana Dashboard Sync` is a VS Code extension for teams that keep Grafana dashboards in git and want a workspace-native way to pull, render, review, back up, and deploy them.
+
+The extension manages a local dashboard project rooted by `.grafana-dashboard-workspace.json` and adds a dedicated Grafana activity bar with dashboard, instance, backup, and details views.
+
+## Features
+
+- Pull dashboards from Grafana into a tracked repository layout.
+- Render dashboards per deployment target before deploy.
+- Deploy one dashboard, one target, one instance, or all instances.
+- Create and restore raw target backups.
+- Manage deployment target placement overrides.
+- Rewrite datasource bindings per instance and per dashboard.
+- Store Grafana tokens in VS Code Secret Storage instead of plaintext files.
+
+## Workspace Layout
+
+The extension activates only for workspaces that contain `.grafana-dashboard-workspace.json`.
+
+Default layout:
+
+```text
+project-root/
+  .grafana-dashboard-workspace.json
+  dashboard-manifest.json
+  dashboards/
+  instances/
+    <instance>/
+  backups/
+  renders/
+```
+
+Minimal workspace marker:
+
+```json
+{
+  "version": 1,
+  "maxBackups": 20
+}
+```
+
+You can keep the Grafana project at the workspace root or inside a subfolder. The `Initialize Grafana Dashboard Project` command bootstraps the required structure.
+
+## Getting Started
+
+1. Open the folder that should contain your Grafana dashboard project in VS Code.
+2. Run `Initialize Grafana Dashboard Project` if the project structure does not exist yet.
+3. Create one or more instances in the `Instances` view.
+4. Set an API token for each instance with `Set Instance Token`.
+5. Add dashboards to the manifest or pull them from a remote Grafana instance.
+6. Render and deploy using the activity bar views or command palette.
+
+## Core Workflows
+
+### Pull
+
+- `Pull Dashboard`
+- `Pull All Managed Dashboards`
+
+These commands fetch dashboards from the selected instance and persist them into `dashboards/` according to the manifest.
+
+### Render
+
+- `Render Dashboard`
+- `Render Target`
+- `Render Instance`
+- `Render All Instances`
+- `Open Render Folder`
+
+Rendered artifacts are written to:
+
+```text
+renders/<instance>/<target>/
+```
+
+Each render produces dashboard JSON files plus `.render-manifest.json` with resolved dashboard UIDs and target folders.
+
+### Deploy
+
+- `Deploy Dashboard`
+- `Restore Backup`
+
+Deploy uses the rendered target state and can create raw backups before modifying live dashboards.
+
+### Backups
+
+The `Backups` view manages snapshots under:
+
+```text
+backups/targets/<instance>/<target>/<timestamp>/
+```
+
+Managed backups store the live dashboard JSON, effective dashboard UID, and target folder path for each captured dashboard.
+
+## Datasource Mappings
+
+Datasource overrides are stored per instance and dashboard:
+
+```text
+instances/<instance>/datasources/<same path as dashboard>.json
+```
+
+Example:
+
+```json
+{
+  "datasources": {
+    "Source Datasource": {
+      "sourceUid": "source-uid",
+      "uid": "target-uid",
+      "name": "Target Datasource"
+    }
+  }
+}
+```
+
+When the selected instance is reachable, the `Details` panel can load remote datasource options for direct editing.
+
+## Tokens
+
+Instance tokens are stored in VS Code Secret Storage. They are not written to `instances/<instance>/.env`.
+
+## Development
+
+Prerequisites:
+
+- VS Code 1.88+
+- Node.js LTS
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Build:
+
+```bash
+npm run compile
+```
+
+Typecheck:
+
+```bash
+npm run lint
+```
+
+Test:
+
+```bash
+npm test
+```
+
+Run the extension in a development host by opening this repository in VS Code and pressing `F5`.
+
+## Packaging And Publishing
+
+Package the extension:
+
+```bash
+npm run package
+```
+
+Publish to the Visual Studio Marketplace:
+
+```bash
+npm run publish:marketplace
+```
+
+You need:
+
+- a Visual Studio Marketplace publisher
+- a Personal Access Token for that publisher
+- `publisher` in `package.json` that matches the Marketplace publisher ID
+
+## License
+
+MIT

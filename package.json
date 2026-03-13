@@ -1,0 +1,409 @@
+{
+  "name": "grafana-dashboard-sync",
+  "displayName": "Grafana Dashboard Sync",
+  "description": "Manage Grafana dashboards from VS Code with pull, render, deploy, backup, and datasource mapping workflows.",
+  "version": "0.7.0",
+  "publisher": "vase",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vase/grafana-dashboard-sync.git"
+  },
+  "homepage": "https://github.com/vase/grafana-dashboard-sync#readme",
+  "bugs": {
+    "url": "https://github.com/vase/grafana-dashboard-sync/issues"
+  },
+  "keywords": [
+    "grafana",
+    "dashboards",
+    "observability",
+    "monitoring",
+    "devops",
+    "infrastructure",
+    "visualization"
+  ],
+  "icon": "media/icon.png",
+  "engines": {
+    "vscode": "^1.88.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "workspaceContains:.grafana-dashboard-workspace.json",
+    "workspaceContains:**/.grafana-dashboard-workspace.json",
+    "onView:grafanaDashboards.dashboards",
+    "onView:grafanaDashboards.instances",
+    "onView:grafanaDashboards.backups",
+    "onView:grafanaDashboards.details",
+    "onCommand:grafanaDashboards.refresh",
+    "onCommand:grafanaDashboards.initializeProject",
+    "onCommand:grafanaDashboards.selectActiveInstance",
+    "onCommand:grafanaDashboards.createDeploymentTarget",
+    "onCommand:grafanaDashboards.removeDeploymentTarget",
+    "onCommand:grafanaDashboards.pickPlacementFolder",
+    "onCommand:grafanaDashboards.setInstanceToken",
+    "onCommand:grafanaDashboards.clearInstanceToken",
+    "onCommand:grafanaDashboards.createBackup",
+    "onCommand:grafanaDashboards.createDashboardBackup",
+    "onCommand:grafanaDashboards.deployBackup",
+    "onCommand:grafanaDashboards.renderDashboard",
+    "onCommand:grafanaDashboards.renderTarget",
+    "onCommand:grafanaDashboards.renderInstance",
+    "onCommand:grafanaDashboards.renderAllInstances",
+    "onCommand:grafanaDashboards.openRenderFolder",
+    "onCommand:grafanaDashboards.removeInstance",
+    "onCommand:grafanaDashboards.pullAllDashboards"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "grafanaDashboards",
+          "title": "Grafana",
+          "icon": "media/grafana.svg"
+        }
+      ]
+    },
+    "views": {
+      "grafanaDashboards": [
+        {
+          "id": "grafanaDashboards.dashboards",
+          "name": "Dashboards"
+        },
+        {
+          "id": "grafanaDashboards.instances",
+          "name": "Instances"
+        },
+        {
+          "id": "grafanaDashboards.backups",
+          "name": "Backups"
+        },
+        {
+          "id": "grafanaDashboards.details",
+          "name": "Details",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "grafanaDashboards.initializeProject",
+        "title": "Initialize Grafana Dashboard Project"
+      },
+      {
+        "command": "grafanaDashboards.refresh",
+        "title": "Refresh"
+      },
+      {
+        "command": "grafanaDashboards.selectActiveInstance",
+        "title": "Select Active Deployment Target"
+      },
+      {
+        "command": "grafanaDashboards.setInstanceToken",
+        "title": "Set Instance Token"
+      },
+      {
+        "command": "grafanaDashboards.clearInstanceToken",
+        "title": "Clear Instance Token"
+      },
+      {
+        "command": "grafanaDashboards.createBackup",
+        "title": "Create Target Backup"
+      },
+      {
+        "command": "grafanaDashboards.createDashboardBackup",
+        "title": "Create Dashboard Backup"
+      },
+      {
+        "command": "grafanaDashboards.deployBackup",
+        "title": "Restore Backup"
+      },
+      {
+        "command": "grafanaDashboards.renderDashboard",
+        "title": "Render Dashboard"
+      },
+      {
+        "command": "grafanaDashboards.renderTarget",
+        "title": "Render Target"
+      },
+      {
+        "command": "grafanaDashboards.renderInstance",
+        "title": "Render Instance"
+      },
+      {
+        "command": "grafanaDashboards.renderAllInstances",
+        "title": "Render All Instances"
+      },
+      {
+        "command": "grafanaDashboards.openRenderFolder",
+        "title": "Open Render Folder"
+      },
+      {
+        "command": "grafanaDashboards.openBackupFolder",
+        "title": "Open Backup Folder"
+      },
+      {
+        "command": "grafanaDashboards.deleteBackup",
+        "title": "Delete Backup"
+      },
+      {
+        "command": "grafanaDashboards.createManifestFromExample",
+        "title": "Create Manifest From Example"
+      },
+      {
+        "command": "grafanaDashboards.addDashboard",
+        "title": "Add Dashboard"
+      },
+      {
+        "command": "grafanaDashboards.pullDashboard",
+        "title": "Pull Dashboard"
+      },
+      {
+        "command": "grafanaDashboards.pullAllDashboards",
+        "title": "Pull All Managed Dashboards"
+      },
+      {
+        "command": "grafanaDashboards.deployDashboard",
+        "title": "Deploy Dashboard"
+      },
+      {
+        "command": "grafanaDashboards.openDashboardJson",
+        "title": "Open Dashboard JSON"
+      },
+      {
+        "command": "grafanaDashboards.removeDashboard",
+        "title": "Remove Dashboard"
+      },
+      {
+        "command": "grafanaDashboards.createInstance",
+        "title": "Create Instance"
+      },
+      {
+        "command": "grafanaDashboards.createDeploymentTarget",
+        "title": "Create Deployment Target"
+      },
+      {
+        "command": "grafanaDashboards.removeDeploymentTarget",
+        "title": "Remove Deployment Target"
+      },
+      {
+        "command": "grafanaDashboards.pickPlacementFolder",
+        "title": "Choose Placement Folder"
+      },
+      {
+        "command": "grafanaDashboards.removeInstance",
+        "title": "Remove Instance"
+      },
+      {
+        "command": "grafanaDashboards.openOverrideFile",
+        "title": "Open Override File"
+      },
+      {
+        "command": "grafanaDashboards.generateOverride",
+        "title": "Generate Override From Dashboard"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "grafanaDashboards.initializeProject",
+          "when": "view == grafanaDashboards.dashboards",
+          "group": "project@1"
+        },
+        {
+          "command": "grafanaDashboards.refresh",
+          "when": "view == grafanaDashboards.dashboards || view == grafanaDashboards.instances || view == grafanaDashboards.backups",
+          "group": "general@1"
+        },
+        {
+          "command": "grafanaDashboards.createManifestFromExample",
+          "when": "view == grafanaDashboards.dashboards",
+          "group": "project@2"
+        },
+        {
+          "command": "grafanaDashboards.addDashboard",
+          "when": "view == grafanaDashboards.dashboards",
+          "group": "manage@1"
+        },
+        {
+          "command": "grafanaDashboards.pullDashboard",
+          "when": "view == grafanaDashboards.dashboards",
+          "group": "sync@1"
+        },
+        {
+          "command": "grafanaDashboards.pullAllDashboards",
+          "when": "view == grafanaDashboards.dashboards",
+          "group": "sync@2"
+        },
+        {
+          "command": "grafanaDashboards.deployDashboard",
+          "when": "view == grafanaDashboards.dashboards",
+          "group": "sync@3"
+        },
+        {
+          "command": "grafanaDashboards.renderDashboard",
+          "when": "view == grafanaDashboards.dashboards",
+          "group": "sync@4"
+        },
+        {
+          "command": "grafanaDashboards.createDashboardBackup",
+          "when": "view == grafanaDashboards.dashboards",
+          "group": "sync@5"
+        },
+        {
+          "command": "grafanaDashboards.selectActiveInstance",
+          "when": "view == grafanaDashboards.instances",
+          "group": "manage@1"
+        },
+        {
+          "command": "grafanaDashboards.createBackup",
+          "when": "view == grafanaDashboards.backups",
+          "group": "manage@1"
+        },
+        {
+          "command": "grafanaDashboards.createDashboardBackup",
+          "when": "view == grafanaDashboards.backups",
+          "group": "manage@2"
+        },
+        {
+          "command": "grafanaDashboards.createInstance",
+          "when": "view == grafanaDashboards.instances",
+          "group": "manage@2"
+        },
+        {
+          "command": "grafanaDashboards.createDeploymentTarget",
+          "when": "view == grafanaDashboards.instances",
+          "group": "manage@3"
+        },
+        {
+          "command": "grafanaDashboards.renderAllInstances",
+          "when": "view == grafanaDashboards.instances",
+          "group": "manage@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "grafanaDashboards.openDashboardJson",
+          "when": "view == grafanaDashboards.dashboards && viewItem == grafanaDashboard",
+          "group": "navigation"
+        },
+        {
+          "command": "grafanaDashboards.pullDashboard",
+          "when": "view == grafanaDashboards.dashboards && viewItem == grafanaDashboard",
+          "group": "navigation@1"
+        },
+        {
+          "command": "grafanaDashboards.deployDashboard",
+          "when": "view == grafanaDashboards.dashboards && viewItem == grafanaDashboard",
+          "group": "navigation@2"
+        },
+        {
+          "command": "grafanaDashboards.renderDashboard",
+          "when": "view == grafanaDashboards.dashboards && viewItem == grafanaDashboard",
+          "group": "navigation@3"
+        },
+        {
+          "command": "grafanaDashboards.generateOverride",
+          "when": "view == grafanaDashboards.dashboards && viewItem == grafanaDashboard",
+          "group": "navigation@4"
+        },
+        {
+          "command": "grafanaDashboards.createDashboardBackup",
+          "when": "view == grafanaDashboards.dashboards && viewItem == grafanaDashboard",
+          "group": "navigation@5"
+        },
+        {
+          "command": "grafanaDashboards.removeDashboard",
+          "when": "view == grafanaDashboards.dashboards && viewItem == grafanaDashboard",
+          "group": "navigation@10"
+        },
+        {
+          "command": "grafanaDashboards.createDeploymentTarget",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
+          "group": "navigation@4"
+        },
+        {
+          "command": "grafanaDashboards.pullDashboard",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
+          "group": "navigation@5"
+        },
+        {
+          "command": "grafanaDashboards.pullAllDashboards",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
+          "group": "navigation@6"
+        },
+        {
+          "command": "grafanaDashboards.renderInstance",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
+          "group": "navigation@6.5"
+        },
+        {
+          "command": "grafanaDashboards.clearInstanceToken",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
+          "group": "navigation@7"
+        },
+        {
+          "command": "grafanaDashboards.removeInstance",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
+          "group": "navigation@8"
+        },
+        {
+          "command": "grafanaDashboards.deployDashboard",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaDeploymentTarget",
+          "group": "navigation@9"
+        },
+        {
+          "command": "grafanaDashboards.renderTarget",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaDeploymentTarget",
+          "group": "navigation@9.25"
+        },
+        {
+          "command": "grafanaDashboards.openRenderFolder",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaDeploymentTarget",
+          "group": "navigation@9.5"
+        },
+        {
+          "command": "grafanaDashboards.openOverrideFile",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaDeploymentTarget",
+          "group": "navigation@10"
+        },
+        {
+          "command": "grafanaDashboards.removeDeploymentTarget",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaDeploymentTarget",
+          "group": "navigation@11"
+        },
+        {
+          "command": "grafanaDashboards.deployBackup",
+          "when": "view == grafanaDashboards.backups && viewItem == grafanaBackup",
+          "group": "navigation"
+        },
+        {
+          "command": "grafanaDashboards.openBackupFolder",
+          "when": "view == grafanaDashboards.backups && viewItem == grafanaBackup",
+          "group": "navigation@1"
+        },
+        {
+          "command": "grafanaDashboards.deleteBackup",
+          "when": "view == grafanaDashboards.backups && viewItem == grafanaBackup",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "tsc --noEmit -p ./",
+    "test": "npm run compile && node --test ./out/test/**/*.test.js",
+    "package": "vsce package",
+    "publish:marketplace": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "@types/vscode": "^1.88.0",
+    "@vscode/vsce": "^3.7.1",
+    "typescript": "^5.4.5"
+  }
+}
