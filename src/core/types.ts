@@ -11,12 +11,7 @@ export interface DashboardManifest {
 export interface WorkspaceInstanceConfig {
   grafanaUrl?: string;
   grafanaNamespace?: string;
-  targets: Record<
-    string,
-    {
-      defaults?: Record<string, DashboardOverrideValue>;
-    }
-  >;
+  targets: Record<string, Record<string, never>>;
 }
 
 export interface WorkspaceProjectConfig {
@@ -133,16 +128,12 @@ export interface InstanceRecord {
   envPath: string;
   envExists: boolean;
   envExamplePath: string;
-  defaultsPath: string;
-  defaultsExists: boolean;
 }
 
 export interface DeploymentTargetRecord {
   instanceName: string;
   name: string;
   dirPath: string;
-  defaultsPath: string;
-  defaultsExists: boolean;
 }
 
 export interface EffectiveConnectionConfig {
@@ -351,7 +342,6 @@ export interface InstanceDetailsModel {
 
 export interface DeploymentTargetDetailsModel {
   target: DeploymentTargetRecord;
-  defaultsValues: Record<string, DashboardOverrideValue>;
 }
 
 export interface OverrideEditorVariableModel {

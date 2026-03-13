@@ -890,9 +890,8 @@ class DashboardService {
     }
     async buildOverrideEditorVariables(instanceName, targetName, entry) {
         const dashboard = await this.repository.readDashboardJson(entry);
-        const defaultsFile = await this.repository.readTargetDefaultsFile(instanceName, targetName);
         const savedOverride = await this.repository.readTargetOverrideFile(instanceName, targetName, entry);
-        const effectiveDashboard = (0, overrides_1.applyOverridesToDashboard)(dashboard, defaultsFile, savedOverride);
+        const effectiveDashboard = (0, overrides_1.applyOverridesToDashboard)(dashboard, savedOverride);
         const targets = await this.repository.listAllDeploymentTargets();
         const globallyManagedVariableNames = new Set();
         for (const target of targets) {
@@ -965,9 +964,8 @@ class DashboardService {
         const nextManagedVariableNames = new Set([...managedByOtherInstances, ...enabledVariableNameSet]);
         const effectiveVariablesByTarget = new Map();
         for (const target of targets) {
-            const defaultsFile = await this.repository.readTargetDefaultsFile(target.instanceName, target.name);
             const overrideFile = existingOverrideFiles.get(`${target.instanceName}/${target.name}`);
-            const effectiveDashboard = (0, overrides_1.applyOverridesToDashboard)(dashboard, defaultsFile, overrideFile);
+            const effectiveDashboard = (0, overrides_1.applyOverridesToDashboard)(dashboard, overrideFile);
             const effectiveVariables = Object.fromEntries((0, overrides_1.extractSupportedVariables)(effectiveDashboard).map((descriptor) => [
                 descriptor.name,
                 (0, overrides_1.normalizeCurrentForStorage)({
@@ -1031,9 +1029,8 @@ class DashboardService {
             if (managedVariableNames.size === 0 && supportedVariables.length === 0) {
                 continue;
             }
-            const defaultsFile = await this.repository.readTargetDefaultsFile(instanceName, targetName);
             const existingOverride = existingOverrideFiles.get(currentTargetKey);
-            const effectiveDashboard = (0, overrides_1.applyOverridesToDashboard)(dashboard, defaultsFile, existingOverride);
+            const effectiveDashboard = (0, overrides_1.applyOverridesToDashboard)(dashboard, existingOverride);
             const effectivePlacement = await this.buildPlacementDetails(instanceName, targetName, record.entry);
             const effectiveVariables = Object.fromEntries((0, overrides_1.extractSupportedVariables)(effectiveDashboard).map((descriptor) => [
                 descriptor.name,
@@ -1164,10 +1161,9 @@ class DashboardService {
         await this.repository.saveDatasourceCatalog(nextCatalog);
     }
     async renderDashboardForTarget(sourceRepository, entry, baseDashboard, instanceName, targetName) {
-        const defaultsFile = await sourceRepository.readTargetDefaultsFile(instanceName, targetName);
         const overrideFile = await this.materializeDashboardUidForTarget(sourceRepository, instanceName, targetName, entry);
         const datasourceCatalog = await sourceRepository.readDatasourceCatalog();
-        const dashboardWithVariableOverrides = (0, overrides_1.applyOverridesToDashboard)(baseDashboard, defaultsFile, overrideFile);
+        const dashboardWithVariableOverrides = (0, overrides_1.applyOverridesToDashboard)(baseDashboard, overrideFile);
         dashboardWithVariableOverrides.uid = this.effectiveDashboardUidForTarget(entry, targetName, overrideFile);
         const missingMappings = (0, datasourceMappings_1.findMissingDatasourceMappings)(dashboardWithVariableOverrides, datasourceCatalog, instanceName);
         if (missingMappings.length > 0) {

@@ -173,12 +173,8 @@ function validateCustomOverrideValue(variable, normalizedOverride) {
         throw new Error(`Override value ${invalidValues.map((value) => `"${value}"`).join(", ")} is not available in custom variable "${String(variable.name ?? "")}".`);
     }
 }
-function applyOverridesToDashboard(dashboard, defaultsFile, overrideFile) {
-    const mergedVariables = {
-        ...(defaultsFile?.variables ?? {}),
-        ...(overrideFile?.variables ?? {}),
-    };
-    if (Object.keys(mergedVariables).length === 0) {
+function applyOverridesToDashboard(dashboard, overrideFile) {
+    if (Object.keys(overrideFile?.variables ?? {}).length === 0) {
         return structuredClone(dashboard);
     }
     const nextDashboard = structuredClone(dashboard);
@@ -196,7 +192,7 @@ function applyOverridesToDashboard(dashboard, defaultsFile, overrideFile) {
             if (typeof name !== "string" || typeof type !== "string" || !SUPPORTED_VARIABLE_TYPES.has(type)) {
                 return variable;
             }
-            const overrideValue = mergedVariables[name];
+            const overrideValue = overrideFile?.variables[name];
             if (overrideValue === undefined) {
                 return variable;
             }

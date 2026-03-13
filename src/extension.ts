@@ -873,7 +873,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             target.instanceName === selectionState.selectedInstanceName && target.name === selectionState.selectedTargetName
               ? "Active"
               : undefined,
-          detail: target.defaultsExists ? "Target defaults present" : "Target defaults missing",
           action: "select" as const,
           instanceName: target.instanceName,
           targetName: target.name,
@@ -1199,7 +1198,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const selection = await vscode.window.showQuickPick(
       targets.map((target) => ({
         label: `${target.instanceName}/${target.name}`,
-        description: target.defaultsExists ? "Target defaults present" : "Target defaults missing",
         target,
       })),
       {
@@ -1319,7 +1317,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const selection = await vscode.window.showQuickPick(
       targets.map((target) => ({
         label: `${target.instanceName}/${target.name}`,
-        description: target.defaultsExists ? "Target defaults present" : "Target defaults missing",
         target,
       })),
       {

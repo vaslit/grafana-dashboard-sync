@@ -126,9 +126,6 @@ const overrides_1 = require("../core/overrides");
     const rendered = (0, overrides_1.applyOverridesToDashboard)(dashboard, {
         variables: {
             site: "nsk",
-        },
-    }, {
-        variables: {
             freeText: "new text",
             siteConst: "RND",
         },
@@ -169,7 +166,7 @@ const overrides_1 = require("../core/overrides");
             ],
         },
     };
-    strict_1.default.throws(() => (0, overrides_1.applyOverridesToDashboard)(dashboard, undefined, {
+    strict_1.default.throws(() => (0, overrides_1.applyOverridesToDashboard)(dashboard, {
         variables: {
             site: "LUZ",
         },

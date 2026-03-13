@@ -105,7 +105,6 @@ class DashboardTargetTreeItem extends vscode.TreeItem {
         this.tooltip = new vscode.MarkdownString([
             `**${record.selectorName} -> ${target.instanceName}/${target.name}**`,
             "",
-            `Defaults: ${target.defaultsExists ? "present" : "missing"}`,
             `Override for this dashboard: ${overrideExists ? "present" : "missing"}`,
             `Folder override for this dashboard: ${folderOverrideExists ? "present" : "missing"}`,
         ].join("\n"));

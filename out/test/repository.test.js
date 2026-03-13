@@ -69,7 +69,7 @@ async function withTempProject(run) {
         strict_1.default.equal(repository.folderMetaPathForEntry(entry), node_path_1.default.join(repository.dashboardsDir, "integration", ".folder.json"));
     });
 });
-(0, node_test_1.test)("migrateDeploymentTargets moves legacy flat overrides and defaults into targets/default", async () => {
+(0, node_test_1.test)("migrateDeploymentTargets moves legacy flat overrides into targets/default", async () => {
     await withTempProject(async (_rootPath, repository) => {
         const entry = {
             name: "sync-status",
@@ -78,11 +78,6 @@ async function withTempProject(run) {
         };
         await repository.saveManifest({ dashboards: [entry] });
         await repository.createInstance("prod");
-        await repository.writeJsonFile(node_path_1.default.join(repository.instancesDir, "prod", "defaults.json"), {
-            variables: {
-                region: "nsk",
-            },
-        });
         await repository.writeJsonFile(node_path_1.default.join(repository.instancesDir, "prod", entry.path), {
             variables: {
                 site: "rnd",
@@ -90,11 +85,7 @@ async function withTempProject(run) {
         });
         const changed = await repository.migrateDeploymentTargets();
         strict_1.default.equal(changed, true);
-        strict_1.default.deepEqual((await repository.loadWorkspaceConfig()).instances.prod.targets.default, {
-            defaults: {
-                region: "nsk",
-            },
-        });
+        strict_1.default.deepEqual((await repository.loadWorkspaceConfig()).instances.prod.targets.default, {});
         strict_1.default.equal(await repository.readTextFileIfExists(repository.dashboardOverridesFilePath(entry)), "{\n  \"dashboards\": {\n    \"uid-1\": {\n      \"targets\": {\n        \"prod/default\": {\n          \"variables\": {\n            \"site\": \"rnd\"\n          }\n        }\n      }\n    }\n  }\n}\n");
     });
 });

@@ -225,15 +225,9 @@ function validateCustomOverrideValue(
 
 export function applyOverridesToDashboard(
   dashboard: Record<string, unknown>,
-  defaultsFile: DashboardOverrideFile | undefined,
   overrideFile: DashboardOverrideFile | undefined,
 ): Record<string, unknown> {
-  const mergedVariables: Record<string, DashboardOverrideValue> = {
-    ...(defaultsFile?.variables ?? {}),
-    ...(overrideFile?.variables ?? {}),
-  };
-
-  if (Object.keys(mergedVariables).length === 0) {
+  if (Object.keys(overrideFile?.variables ?? {}).length === 0) {
     return structuredClone(dashboard);
   }
 
@@ -255,7 +249,7 @@ export function applyOverridesToDashboard(
         return variable;
       }
 
-      const overrideValue = mergedVariables[name];
+      const overrideValue = overrideFile?.variables[name];
       if (overrideValue === undefined) {
         return variable;
       }

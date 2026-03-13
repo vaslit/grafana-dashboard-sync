@@ -78,7 +78,7 @@ test("repository resolves dashboard, override and folder metadata paths", async 
   });
 });
 
-test("migrateDeploymentTargets moves legacy flat overrides and defaults into targets/default", async () => {
+test("migrateDeploymentTargets moves legacy flat overrides into targets/default", async () => {
   await withTempProject(async (_rootPath, repository) => {
     const entry = {
       name: "sync-status",
@@ -88,11 +88,6 @@ test("migrateDeploymentTargets moves legacy flat overrides and defaults into tar
 
     await repository.saveManifest({ dashboards: [entry] });
     await repository.createInstance("prod");
-    await repository.writeJsonFile(path.join(repository.instancesDir, "prod", "defaults.json"), {
-      variables: {
-        region: "nsk",
-      },
-    });
     await repository.writeJsonFile(path.join(repository.instancesDir, "prod", entry.path), {
       variables: {
         site: "rnd",
@@ -102,11 +97,7 @@ test("migrateDeploymentTargets moves legacy flat overrides and defaults into tar
     const changed = await repository.migrateDeploymentTargets();
 
     assert.equal(changed, true);
-    assert.deepEqual((await repository.loadWorkspaceConfig()).instances.prod.targets.default, {
-      defaults: {
-        region: "nsk",
-      },
-    });
+    assert.deepEqual((await repository.loadWorkspaceConfig()).instances.prod.targets.default, {});
     assert.equal(
       await repository.readTextFileIfExists(repository.dashboardOverridesFilePath(entry)),
       "{\n  \"dashboards\": {\n    \"uid-1\": {\n      \"targets\": {\n        \"prod/default\": {\n          \"variables\": {\n            \"site\": \"rnd\"\n          }\n        }\n      }\n    }\n  }\n}\n",

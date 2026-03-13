@@ -133,10 +133,6 @@ test("applyOverridesToDashboard rewrites current values for supported variables"
     {
       variables: {
         site: "nsk",
-      },
-    },
-    {
-      variables: {
         freeText: "new text",
         siteConst: "RND",
       },
@@ -184,7 +180,7 @@ test("applyOverridesToDashboard rejects custom override values that are not in t
 
   assert.throws(
     () =>
-      applyOverridesToDashboard(dashboard, undefined, {
+      applyOverridesToDashboard(dashboard, {
         variables: {
           site: "LUZ",
         },

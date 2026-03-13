@@ -77,7 +77,6 @@ export class DashboardTargetTreeItem extends vscode.TreeItem {
       [
         `**${record.selectorName} -> ${target.instanceName}/${target.name}**`,
         "",
-        `Defaults: ${target.defaultsExists ? "present" : "missing"}`,
         `Override for this dashboard: ${overrideExists ? "present" : "missing"}`,
         `Folder override for this dashboard: ${folderOverrideExists ? "present" : "missing"}`,
       ].join("\n"),

@@ -114,6 +114,7 @@ function validateWorkspaceProjectConfig(config, filePath) {
     if (!config.instances || typeof config.instances !== "object" || Array.isArray(config.instances)) {
         throw new Error(`Invalid workspace config instances: ${filePath}`);
     }
+    const normalizedInstances = {};
     for (const [instanceName, instanceConfig] of Object.entries(config.instances)) {
         if (!instanceName.trim()) {
             throw new Error(`Invalid workspace config instance name: ${filePath}`);
@@ -135,8 +136,16 @@ function validateWorkspaceProjectConfig(config, filePath) {
                 throw new Error(`Invalid workspace config target name: ${filePath}`);
             }
         }
+        normalizedInstances[instanceName] = {
+            ...(instanceConfig.grafanaUrl ? { grafanaUrl: instanceConfig.grafanaUrl } : {}),
+            ...(instanceConfig.grafanaNamespace ? { grafanaNamespace: instanceConfig.grafanaNamespace } : {}),
+            targets: Object.fromEntries(Object.keys(instanceConfig.targets).map((targetName) => [targetName, {}])),
+        };
     }
-    return config;
+    return {
+        ...config,
+        instances: normalizedInstances,
+    };
 }
 function validateDatasourceCatalogFile(mappingFile, filePath) {
     if (!mappingFile || typeof mappingFile !== "object" || Array.isArray(mappingFile)) {
@@ -416,14 +425,8 @@ class ProjectRepository {
     targetOverridePath(instanceName, targetName, entry) {
         return `${this.dashboardOverridesFilePath(entry)}#${this.dashboardOverrideTargetKey(instanceName, targetName)}`;
     }
-    targetDefaultsPath(instanceName, targetName) {
-        return `${projectLocator_1.PROJECT_CONFIG_FILE}#instances.${instanceName}.targets.${targetName}.defaults`;
-    }
     overridePath(instanceName, entry) {
         return this.targetOverridePath(instanceName, exports.DEFAULT_DEPLOYMENT_TARGET, entry);
-    }
-    defaultsPath(instanceName) {
-        return `${projectLocator_1.PROJECT_CONFIG_FILE}#instances.${instanceName}.targets.${exports.DEFAULT_DEPLOYMENT_TARGET}.defaults`;
     }
     instanceEnvPath(instanceName) {
         return node_path_1.default.join(this.instancesDir, instanceName, ".env");
@@ -590,21 +593,6 @@ class ProjectRepository {
             : await this.loadManifest().catch(() => ({ dashboards: [] }));
         let changed = false;
         for (const instance of instances) {
-            const legacyDefaultsPath = node_path_1.default.join(this.instancesDir, instance.name, "defaults.json");
-            if (await exists(legacyDefaultsPath)) {
-                const legacyDefaults = await this.readJsonFile(legacyDefaultsPath);
-                const config = await this.loadWorkspaceConfig();
-                config.instances[instance.name] ??= {
-                    grafanaNamespace: "default",
-                    targets: {},
-                };
-                config.instances[instance.name].targets[exports.DEFAULT_DEPLOYMENT_TARGET] ??= {};
-                if (!config.instances[instance.name].targets[exports.DEFAULT_DEPLOYMENT_TARGET].defaults) {
-                    config.instances[instance.name].targets[exports.DEFAULT_DEPLOYMENT_TARGET].defaults = legacyDefaults.variables;
-                    await this.saveWorkspaceConfig(config);
-                }
-                changed = true;
-            }
             for (const entry of manifest.dashboards) {
                 const legacyOverridePath = node_path_1.default.join(this.instancesDir, instance.name, entry.path);
                 if (await exists(legacyOverridePath)) {
@@ -630,12 +618,6 @@ class ProjectRepository {
                         targets: {},
                     };
                     config.instances[instance.name].targets[targetName] ??= {};
-                    const legacyTargetDefaultsPath = node_path_1.default.join(legacyTargetsDir, targetName, "defaults.json");
-                    if ((await exists(legacyTargetDefaultsPath)) &&
-                        !config.instances[instance.name].targets[targetName].defaults) {
-                        const legacyDefaults = await this.readJsonFile(legacyTargetDefaultsPath);
-                        config.instances[instance.name].targets[targetName].defaults = legacyDefaults.variables;
-                    }
                     await this.saveWorkspaceConfig(config);
                     for (const entry of manifest.dashboards) {
                         const legacyTargetOverridePath = node_path_1.default.join(legacyTargetsDir, targetName, entry.path);
@@ -971,8 +953,6 @@ class ProjectRepository {
                 envPath: this.workspaceConfigPath,
                 envExists: Boolean(config.instances[instanceName]?.grafanaUrl),
                 envExamplePath: this.instanceEnvExamplePath(instanceName),
-                defaultsPath: this.defaultsPath(instanceName),
-                defaultsExists: Boolean(config.instances[instanceName]?.targets[exports.DEFAULT_DEPLOYMENT_TARGET]?.defaults),
             });
         }
         return instances.sort((left, right) => left.name.localeCompare(right.name));
@@ -1003,8 +983,6 @@ class ProjectRepository {
             envPath: this.workspaceConfigPath,
             envExists: Boolean(config.instances[sanitized]?.grafanaUrl),
             envExamplePath: this.instanceEnvExamplePath(sanitized),
-            defaultsPath: this.defaultsPath(sanitized),
-            defaultsExists: Boolean(config.instances[sanitized]?.targets[exports.DEFAULT_DEPLOYMENT_TARGET]?.defaults),
         };
     }
     async removeInstance(instanceName) {
@@ -1028,8 +1006,6 @@ class ProjectRepository {
                 instanceName,
                 name: targetName,
                 dirPath: `${this.workspaceConfigPath}#instances.${instanceName}.targets.${targetName}`,
-                defaultsPath: this.targetDefaultsPath(instanceName, targetName),
-                defaultsExists: Boolean(instance.targets[targetName]?.defaults),
             });
         }
         return targets.sort((left, right) => left.name.localeCompare(right.name));
@@ -1066,8 +1042,6 @@ class ProjectRepository {
             instanceName,
             name: sanitized,
             dirPath: `${this.workspaceConfigPath}#instances.${instanceName}.targets.${sanitized}`,
-            defaultsPath: this.targetDefaultsPath(instanceName, sanitized),
-            defaultsExists: Boolean(currentInstance.targets[sanitized]?.defaults),
         };
     }
     async removeDeploymentTarget(instanceName, targetName) {
@@ -1295,30 +1269,6 @@ class ProjectRepository {
     async saveOverrideFile(instanceName, entry, overrideFile) {
         return this.saveTargetOverrideFile(instanceName, exports.DEFAULT_DEPLOYMENT_TARGET, entry, overrideFile);
     }
-    async readTargetDefaultsFile(instanceName, targetName) {
-        const config = await this.loadWorkspaceConfig();
-        const defaults = config.instances[instanceName]?.targets[targetName]?.defaults;
-        if (!defaults) {
-            return undefined;
-        }
-        return {
-            variables: defaults,
-        };
-    }
-    async readDefaultsFile(instanceName) {
-        return this.readTargetDefaultsFile(instanceName, exports.DEFAULT_DEPLOYMENT_TARGET);
-    }
-    async saveTargetDefaultsFile(instanceName, targetName, defaultsFile) {
-        const config = await this.loadWorkspaceConfig();
-        const instance = config.instances[instanceName];
-        if (!instance) {
-            throw new Error(`Instance not found: ${instanceName}`);
-        }
-        instance.targets[targetName] ??= {};
-        instance.targets[targetName].defaults = defaultsFile.variables;
-        await this.saveWorkspaceConfig(config);
-        return this.targetDefaultsPath(instanceName, targetName);
-    }
     async readDatasourceCatalog() {
         const config = await this.loadWorkspaceConfig();
         return {
@@ -1381,7 +1331,6 @@ class ProjectRepository {
         }
         return {
             target,
-            defaultsValues: (await this.readTargetDefaultsFile(instanceName, targetName))?.variables ?? {},
         };
     }
     static timestamp(now = new Date()) {

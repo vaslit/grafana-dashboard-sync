@@ -740,7 +740,6 @@ async function activate(context) {
                     description: target.instanceName === selectionState.selectedInstanceName && target.name === selectionState.selectedTargetName
                         ? "Active"
                         : undefined,
-                    detail: target.defaultsExists ? "Target defaults present" : "Target defaults missing",
                     action: "select",
                     instanceName: target.instanceName,
                     targetName: target.name,
@@ -938,7 +937,6 @@ async function activate(context) {
         const { record, targets } = await dashboardScopeContext(item);
         const selection = await vscode.window.showQuickPick(targets.map((target) => ({
             label: `${target.instanceName}/${target.name}`,
-            description: target.defaultsExists ? "Target defaults present" : "Target defaults missing",
             target,
         })), {
             title: item instanceof dashboardTreeProvider_1.DashboardInstanceTreeItem
@@ -1027,7 +1025,6 @@ async function activate(context) {
         }
         const selection = await vscode.window.showQuickPick(targets.map((target) => ({
             label: `${target.instanceName}/${target.name}`,
-            description: target.defaultsExists ? "Target defaults present" : "Target defaults missing",
             target,
         })), {
             title: "Choose deployment target",

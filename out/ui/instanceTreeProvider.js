@@ -76,7 +76,6 @@ class DeploymentTargetTreeItem extends vscode.TreeItem {
         this.tooltip = new vscode.MarkdownString([
             `**${target.instanceName}/${target.name}**`,
             "",
-            `Defaults: ${target.defaultsExists ? "present" : "missing"}`,
             `Override for current dashboard: ${overrideExists ? "present" : "missing"}`,
             `Folder override for current dashboard: ${folderOverrideExists ? "present" : "missing"}`,
         ].join("\n"));
