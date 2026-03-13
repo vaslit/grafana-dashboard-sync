@@ -5,6 +5,7 @@ out/test/**
 out/**/*.map
 .gitignore
 .tools/**
+.github/**
 PUBLISHING.md
 *.vsix
 node_modules/.cache/**

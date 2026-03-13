@@ -158,7 +158,11 @@
       },
       {
         "command": "grafanaDashboards.pullDashboard",
-        "title": "Pull Dashboard"
+        "title": "Pull Dashboard",
+        "icon": {
+          "light": "media/pull-light.svg",
+          "dark": "media/pull-dark.svg"
+        }
       },
       {
         "command": "grafanaDashboards.pullAllDashboards",
@@ -166,7 +170,11 @@
       },
       {
         "command": "grafanaDashboards.deployDashboard",
-        "title": "Deploy Dashboard"
+        "title": "Deploy Dashboard",
+        "icon": {
+          "light": "media/deploy-light.svg",
+          "dark": "media/deploy-dark.svg"
+        }
       },
       {
         "command": "grafanaDashboards.openDashboardJson",
@@ -285,6 +293,16 @@
       ],
       "view/item/context": [
         {
+          "command": "grafanaDashboards.pullDashboard",
+          "when": "view == grafanaDashboards.dashboards && (viewItem == grafanaDashboard || viewItem == grafanaDashboardInstance || viewItem == grafanaDashboardTarget)",
+          "group": "inline@1"
+        },
+        {
+          "command": "grafanaDashboards.deployDashboard",
+          "when": "view == grafanaDashboards.dashboards && (viewItem == grafanaDashboard || viewItem == grafanaDashboardInstance || viewItem == grafanaDashboardTarget)",
+          "group": "inline@2"
+        },
+        {
           "command": "grafanaDashboards.openDashboardJson",
           "when": "view == grafanaDashboards.dashboards && viewItem == grafanaDashboard",
           "group": "navigation"
@@ -313,6 +331,21 @@
           "command": "grafanaDashboards.createDashboardBackup",
           "when": "view == grafanaDashboards.dashboards && viewItem == grafanaDashboard",
           "group": "navigation@5"
+        },
+        {
+          "command": "grafanaDashboards.pullDashboard",
+          "when": "view == grafanaDashboards.dashboards && (viewItem == grafanaDashboardInstance || viewItem == grafanaDashboardTarget)",
+          "group": "navigation@1"
+        },
+        {
+          "command": "grafanaDashboards.deployDashboard",
+          "when": "view == grafanaDashboards.dashboards && (viewItem == grafanaDashboardInstance || viewItem == grafanaDashboardTarget)",
+          "group": "navigation@2"
+        },
+        {
+          "command": "grafanaDashboards.renderDashboard",
+          "when": "view == grafanaDashboards.dashboards && (viewItem == grafanaDashboardInstance || viewItem == grafanaDashboardTarget)",
+          "group": "navigation@3"
         },
         {
           "command": "grafanaDashboards.removeDashboard",

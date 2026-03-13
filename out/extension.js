@@ -789,6 +789,22 @@ async function activate(context) {
             instancesProvider.refresh();
             void detailsProvider.refresh();
         }
+        else if (item instanceof dashboardTreeProvider_1.DashboardInstanceTreeItem) {
+            selectionState.setDashboard(item.record.selectorName);
+            selectionState.setInstance(item.instance.name);
+            void repository?.deploymentTargetByName(item.instance.name, repository_1.DEFAULT_DEPLOYMENT_TARGET).then((target) => {
+                selectionState.setTarget(target?.name);
+            });
+            instancesProvider.refresh();
+            void detailsProvider.refresh();
+        }
+        else if (item instanceof dashboardTreeProvider_1.DashboardTargetTreeItem) {
+            selectionState.setDashboard(item.record.selectorName);
+            selectionState.setInstance(item.target.instanceName);
+            selectionState.setTarget(item.target.name);
+            instancesProvider.refresh();
+            void detailsProvider.refresh();
+        }
     });
     const instanceSelectionDisposable = instanceTreeView.onDidChangeSelection((event) => {
         const item = event.selection[0];
@@ -884,6 +900,39 @@ async function activate(context) {
             throw new Error(`Backup not found: ${resolvedKey}`);
         }
         return backup;
+    }
+    function isDashboardScopeItem(item) {
+        return item instanceof dashboardTreeProvider_1.DashboardTreeItem || item instanceof dashboardTreeProvider_1.DashboardInstanceTreeItem || item instanceof dashboardTreeProvider_1.DashboardTargetTreeItem;
+    }
+    async function dashboardScopeContext(item) {
+        const repository = requireRepository();
+        if (item instanceof dashboardTreeProvider_1.DashboardTargetTreeItem) {
+            return {
+                record: item.record,
+                targets: [item.target],
+                label: `${item.record.selectorName} on ${item.target.instanceName}/${item.target.name}`,
+            };
+        }
+        if (item instanceof dashboardTreeProvider_1.DashboardInstanceTreeItem) {
+            const targets = await repository.listDeploymentTargets(item.instance.name);
+            if (targets.length === 0) {
+                throw new Error(`No deployment targets found for ${item.instance.name}.`);
+            }
+            return {
+                record: item.record,
+                targets,
+                label: `${item.record.selectorName} on ${item.instance.name}`,
+            };
+        }
+        const targets = await repository.listAllDeploymentTargets();
+        if (targets.length === 0) {
+            throw new Error("No deployment targets available.");
+        }
+        return {
+            record: item.record,
+            targets,
+            label: `${item.record.selectorName} across all instances`,
+        };
     }
     async function pickDashboardEntries(item) {
         const repository = requireRepository();
@@ -988,6 +1037,19 @@ async function activate(context) {
     }
     async function pullDashboards(item) {
         const service = requireService();
+        if (isDashboardScopeItem(item)) {
+            const { record, targets, label } = await dashboardScopeContext(item);
+            let updatedCount = 0;
+            let skippedCount = 0;
+            for (const target of targets) {
+                const summary = await service.pullDashboards([record.entry], target.instanceName, target.name);
+                updatedCount += summary.updatedCount;
+                skippedCount += summary.skippedCount;
+            }
+            await refreshAll();
+            void vscode.window.showInformationMessage(`Pull complete for ${label}: ${updatedCount} updated, ${skippedCount} unchanged across ${targets.length} target(s).`);
+            return;
+        }
         const explicitDashboardItem = item instanceof dashboardTreeProvider_1.DashboardTreeItem ? item : undefined;
         const explicitInstanceName = item instanceof instanceTreeProvider_1.InstanceTreeItem ? item.instance.name : item instanceof instanceTreeProvider_1.DeploymentTargetTreeItem ? item.target.instanceName : undefined;
         const explicitTargetName = item instanceof instanceTreeProvider_1.DeploymentTargetTreeItem ? item.target.name : undefined;
@@ -998,9 +1060,14 @@ async function activate(context) {
         void vscode.window.showInformationMessage(`Pull complete: ${summary.updatedCount} updated, ${summary.skippedCount} unchanged from ${target.instanceName}/${target.name}.`);
     }
     async function renderDashboardCommand(item) {
+        const service = requireService();
         if (item) {
-            selectionState.setDashboard(item.record.selectorName);
-            await actionHandlers.renderSelected(item.record.selectorName);
+            const { record, targets, label } = await dashboardScopeContext(item);
+            for (const target of targets) {
+                await service.renderDashboards([record.entry], target.instanceName, target.name, "dashboard");
+            }
+            await refreshAll();
+            void vscode.window.showInformationMessage(`Render complete for ${label}: ${targets.length} target(s) updated.`);
             return;
         }
         await actionHandlers.renderSelected(selectionState.selectedDashboardSelectorName);
@@ -1029,6 +1096,17 @@ async function activate(context) {
     }
     async function deployDashboards(item) {
         const service = requireService();
+        if (isDashboardScopeItem(item)) {
+            const { record, targets, label } = await dashboardScopeContext(item);
+            let deployedCount = 0;
+            for (const target of targets) {
+                const summary = await service.deployDashboards([record.entry], target.instanceName, target.name);
+                deployedCount += summary.dashboardResults.length;
+            }
+            await refreshAll();
+            void vscode.window.showInformationMessage(`Deploy complete for ${label}: ${deployedCount} deployment(s) across ${targets.length} target(s).`);
+            return;
+        }
         const explicitDashboardItem = item instanceof dashboardTreeProvider_1.DashboardTreeItem ? item : undefined;
         const explicitInstanceName = item instanceof instanceTreeProvider_1.InstanceTreeItem ? item.instance.name : item instanceof instanceTreeProvider_1.DeploymentTargetTreeItem ? item.target.instanceName : undefined;
         const explicitTargetName = item instanceof instanceTreeProvider_1.DeploymentTargetTreeItem ? item.target.name : undefined;
