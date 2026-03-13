@@ -6,6 +6,20 @@ This repository is prepared for a public release under these defaults:
 - VS Code Marketplace publisher: `vaslit`
 - Extension version: `0.7.0`
 
+## GitHub Releases Automation
+
+GitHub Actions publishes a release automatically on pushes to `main` when the `version` field in [package.json](/home/vase/Projects/grafana-dashboard-sync/package.json) changes.
+
+Automation behavior:
+
+- runs `npm ci`
+- runs `npm test`
+- runs `npm run package`
+- creates tag `v<version>` if it does not exist yet
+- creates or updates the matching GitHub Release
+- uploads `grafana-dashboard-sync-<version>.vsix`
+- supports manual `workflow_dispatch` with `force_release=true` for a one-off release without a version bump
+
 If your actual GitHub owner or Marketplace publisher differs, update [package.json](/home/vase/Projects/grafana-dashboard-sync/package.json) before publishing.
 
 ## GitHub

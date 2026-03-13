@@ -1,0 +1,102 @@
+name: Release VSIX On Version Change
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      force_release:
+        description: Release the current package even if the version did not change
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Detect version change
+        id: version
+        shell: bash
+        run: |
+          current_version="$(node -p "require('./package.json').version")"
+          current_tag="v${current_version}"
+          changed="false"
+          previous_version=""
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force_release }}" = "true" ]; then
+            changed="true"
+          fi
+
+          if git cat-file -e "${{ github.event.before }}:package.json" 2>/dev/null; then
+            previous_version="$(git show "${{ github.event.before }}:package.json" | node -e "const fs = require('node:fs'); const pkg = JSON.parse(fs.readFileSync(0, 'utf8')); process.stdout.write(pkg.version);")"
+          fi
+
+          if [ "${previous_version}" != "${current_version}" ]; then
+            changed="true"
+          fi
+
+          {
+            echo "changed=${changed}"
+            echo "current=${current_version}"
+            echo "previous=${previous_version}"
+            echo "tag=${current_tag}"
+            echo "asset=grafana-dashboard-sync-${current_version}.vsix"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Stop when version is unchanged
+        if: steps.version.outputs.changed != 'true'
+        run: |
+          echo "package.json version did not change on this push."
+
+      - name: Install dependencies
+        if: steps.version.outputs.changed == 'true'
+        run: npm ci
+
+      - name: Run tests
+        if: steps.version.outputs.changed == 'true'
+        run: npm test
+
+      - name: Build VSIX
+        if: steps.version.outputs.changed == 'true'
+        run: npm run package
+
+      - name: Create release tag
+        if: steps.version.outputs.changed == 'true'
+        shell: bash
+        run: |
+          if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "Tag ${{ steps.version.outputs.tag }} already exists."
+          else
+            git tag "${{ steps.version.outputs.tag }}" "${GITHUB_SHA}"
+            git push origin "${{ steps.version.outputs.tag }}"
+          fi
+
+      - name: Publish GitHub release
+        if: steps.version.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            gh release upload "${{ steps.version.outputs.tag }}" "${{ steps.version.outputs.asset }}" --clobber
+          else
+            gh release create "${{ steps.version.outputs.tag }}" "${{ steps.version.outputs.asset }}" \
+              --title "${{ steps.version.outputs.tag }}" \
+              --generate-notes
+          fi

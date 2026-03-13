@@ -162,6 +162,10 @@ Package the extension:
 npm run package
 ```
 
+GitHub Releases are published automatically when a commit or merge reaches `main` with a changed `version` in `package.json`. The workflow builds the `.vsix`, creates tag `v<version>`, and uploads the package to the corresponding GitHub Release.
+
+The same workflow can also be started manually from the GitHub `Actions` tab with `force_release=true` to publish the current version without another version bump.
+
 Publish to the Visual Studio Marketplace:
 
 ```bash
