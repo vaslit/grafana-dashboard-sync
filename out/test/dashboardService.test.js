@@ -132,6 +132,24 @@ function logger() {
         strict_1.default.equal(second.skippedCount, 2);
     });
 });
+(0, node_test_1.test)("pullDashboards creates a new dashboard file when the manifest entry has no local JSON yet", async () => {
+    await withTempProject(async (repository, entry) => {
+        await repository.createInstance("prod");
+        const client = new MockGrafanaClient({
+            dashboard: {
+                title: "Fresh dashboard",
+                uid: entry.uid,
+            },
+            meta: {},
+        }, [], () => { });
+        const service = new dashboardService_1.DashboardService(repository, logger(), async () => client);
+        const summary = await service.pullDashboards([entry], "prod");
+        strict_1.default.equal(summary.updatedCount, 1);
+        strict_1.default.equal(summary.skippedCount, 0);
+        strict_1.default.equal(await repository.readTextFileIfExists(repository.dashboardPath(entry)), "{\n  \"title\": \"Fresh dashboard\",\n  \"uid\": \"uid-1\"\n}\n");
+        strict_1.default.equal((await repository.readDashboardVersionIndex(entry))?.revisions.length, 1);
+    });
+});
 (0, node_test_1.test)("pullDashboards preserves base folder path when dashboard has explicit folderPath overrides", async () => {
     await withTempProject(async (repository, entry) => {
         await repository.createInstance("prod");

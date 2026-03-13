@@ -662,7 +662,9 @@ class DashboardService {
         let skippedCount = 0;
         const dashboardResults = [];
         for (const entry of entries) {
-            await this.ensureDashboardVersionIndex(entry);
+            if (await this.repository.dashboardExists(entry)) {
+                await this.ensureDashboardVersionIndex(entry);
+            }
             const selectorName = (0, manifest_1.selectorNameForEntry)(entry);
             this.log.info(`Pulling ${selectorName} from ${instanceName}/${targetName}`);
             const overrideFile = await this.materializeDashboardUidForTarget(this.repository, instanceName, targetName, entry);

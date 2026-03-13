@@ -372,6 +372,9 @@ class ProjectRepository {
     dashboardPath(entry) {
         return node_path_1.default.join(this.dashboardsDir, entry.path);
     }
+    async dashboardExists(entry) {
+        return exists(this.dashboardPath(entry));
+    }
     dashboardFolderPath(entry) {
         return node_path_1.default.dirname(this.dashboardPath(entry));
     }

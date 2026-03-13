@@ -454,6 +454,10 @@ export class ProjectRepository {
     return path.join(this.dashboardsDir, entry.path);
   }
 
+  async dashboardExists(entry: DashboardManifestEntry): Promise<boolean> {
+    return exists(this.dashboardPath(entry));
+  }
+
   dashboardFolderPath(entry: DashboardManifestEntry): string {
     return path.dirname(this.dashboardPath(entry));
   }

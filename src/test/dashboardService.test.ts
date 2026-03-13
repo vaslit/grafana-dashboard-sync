@@ -174,6 +174,35 @@ test("pullDashboards updates changed files and skips unchanged ones", async () =
   });
 });
 
+test("pullDashboards creates a new dashboard file when the manifest entry has no local JSON yet", async () => {
+  await withTempProject(async (repository, entry) => {
+    await repository.createInstance("prod");
+
+    const client = new MockGrafanaClient(
+      {
+        dashboard: {
+          title: "Fresh dashboard",
+          uid: entry.uid,
+        },
+        meta: {},
+      },
+      [],
+      () => {},
+    );
+    const service = new DashboardService(repository, logger(), async () => client);
+
+    const summary = await service.pullDashboards([entry], "prod");
+
+    assert.equal(summary.updatedCount, 1);
+    assert.equal(summary.skippedCount, 0);
+    assert.equal(
+      await repository.readTextFileIfExists(repository.dashboardPath(entry)),
+      "{\n  \"title\": \"Fresh dashboard\",\n  \"uid\": \"uid-1\"\n}\n",
+    );
+    assert.equal((await repository.readDashboardVersionIndex(entry))?.revisions.length, 1);
+  });
+});
+
 test("pullDashboards preserves base folder path when dashboard has explicit folderPath overrides", async () => {
   await withTempProject(async (repository, entry) => {
     await repository.createInstance("prod");
