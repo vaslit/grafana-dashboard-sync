@@ -37,7 +37,6 @@ export async function initializeProjectDirectory(
     version: 2,
     layout: {
       dashboardsDir: "dashboards",
-      instancesDir: "instances",
       backupsDir: "backups",
       rendersDir: "renders",
       maxBackups: repository.maxBackups,

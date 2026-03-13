@@ -23,7 +23,7 @@ export interface WorkspaceProjectConfig {
   version: 2;
   layout: {
     dashboardsDir: string;
-    instancesDir: string;
+    instancesDir?: string;
     backupsDir: string;
     rendersDir: string;
     maxBackups: number;

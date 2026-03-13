@@ -25,8 +25,6 @@ project-root/
   .grafana-dashboard-workspace.json
   dashboard-manifest.json
   dashboards/
-  instances/
-    <instance>/
   backups/
   renders/
 ```
@@ -41,6 +39,8 @@ Minimal workspace marker:
 ```
 
 You can keep the Grafana project at the workspace root or inside a subfolder. The `Initialize Grafana Dashboard Project` command bootstraps the required structure.
+
+Instance and deployment-target definitions live in `.grafana-dashboard-workspace.json`, not in a dedicated `instances/` folder.
 
 ## Getting Started
 
@@ -95,11 +95,7 @@ Managed backups store the live dashboard JSON, effective dashboard UID, and targ
 
 ## Datasource Mappings
 
-Datasource overrides are stored per instance and dashboard:
-
-```text
-instances/<instance>/datasources/<same path as dashboard>.json
-```
+Datasource mappings are stored in `.grafana-dashboard-workspace.json` and applied per instance when dashboards are rendered or deployed.
 
 Example:
 
@@ -119,7 +115,7 @@ When the selected instance is reachable, the `Details` panel can load remote dat
 
 ## Tokens
 
-Instance tokens are stored in VS Code Secret Storage. They are not written to `instances/<instance>/.env`.
+Instance tokens are stored in VS Code Secret Storage. They are not written to workspace files.
 
 ## Development
 

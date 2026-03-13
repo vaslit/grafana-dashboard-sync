@@ -28,11 +28,11 @@ async function withTempWorkspace(run) {
         strict_1.default.equal(await repository.readTextFileIfExists(node_path_1.default.join(projectRoot, projectLocator_1.PROJECT_CONFIG_FILE)) !== undefined, true);
         strict_1.default.deepEqual(config.layout, {
             dashboardsDir: "dashboards",
-            instancesDir: "instances",
             backupsDir: "backups",
             rendersDir: "renders",
             maxBackups: 20,
         });
+        await strict_1.default.rejects(promises_1.default.stat(node_path_1.default.join(projectRoot, "instances")));
         strict_1.default.deepEqual(config.dashboards, []);
         strict_1.default.deepEqual(config.datasources, {});
         strict_1.default.deepEqual(config.instances, {

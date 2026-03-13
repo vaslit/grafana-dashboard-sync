@@ -70,7 +70,6 @@ function defaultWorkspaceConfig(layout) {
         version: 2,
         layout: {
             dashboardsDir: toRelativeConfigPath(layout.projectRootPath, layout.dashboardsDir),
-            instancesDir: toRelativeConfigPath(layout.projectRootPath, layout.instancesDir),
             backupsDir: toRelativeConfigPath(layout.projectRootPath, layout.backupsDir),
             rendersDir: toRelativeConfigPath(layout.projectRootPath, layout.rendersDir),
             maxBackups: layout.maxBackups,
@@ -92,13 +91,15 @@ function validateWorkspaceProjectConfig(config, filePath) {
     }
     for (const [key, value] of Object.entries({
         dashboardsDir: config.layout.dashboardsDir,
-        instancesDir: config.layout.instancesDir,
         backupsDir: config.layout.backupsDir,
         rendersDir: config.layout.rendersDir,
     })) {
         if (typeof value !== "string" || !value.trim()) {
             throw new Error(`Invalid workspace config ${key}: ${filePath}`);
         }
+    }
+    if (config.layout.instancesDir !== undefined && (typeof config.layout.instancesDir !== "string" || !config.layout.instancesDir.trim())) {
+        throw new Error(`Invalid workspace config instancesDir: ${filePath}`);
     }
     if (typeof config.layout.maxBackups !== "number" ||
         !Number.isInteger(config.layout.maxBackups) ||
@@ -365,7 +366,6 @@ class ProjectRepository {
     }
     async ensureProjectLayout() {
         await ensureDir(this.dashboardsDir);
-        await ensureDir(this.instancesDir);
         await ensureDir(this.backupsDir);
         await ensureDir(this.rendersDir);
     }
@@ -475,7 +475,11 @@ class ProjectRepository {
     async saveWorkspaceConfig(config) {
         const validConfig = validateWorkspaceProjectConfig(config, this.workspaceConfigPath);
         await this.ensureProjectLayout();
-        await this.writeJsonFile(this.workspaceConfigPath, validConfig);
+        const { instancesDir: _legacyInstancesDir, ...layout } = validConfig.layout;
+        await this.writeJsonFile(this.workspaceConfigPath, {
+            ...validConfig,
+            layout,
+        });
     }
     async migrateWorkspaceConfig() {
         const configExists = await this.workspaceConfigExists();
@@ -960,7 +964,7 @@ class ProjectRepository {
         const config = await this.loadWorkspaceConfig();
         const instances = [];
         for (const instanceName of Object.keys(config.instances)) {
-            const dirPath = node_path_1.default.join(this.instancesDir, instanceName);
+            const dirPath = `${this.workspaceConfigPath}#instances.${instanceName}`;
             instances.push({
                 name: instanceName,
                 dirPath,
@@ -983,7 +987,7 @@ class ProjectRepository {
             throw new Error("Instance name must not be empty.");
         }
         await this.ensureProjectLayout();
-        const dirPath = node_path_1.default.join(this.instancesDir, sanitized);
+        const dirPath = `${this.workspaceConfigPath}#instances.${sanitized}`;
         const config = await this.loadWorkspaceConfig();
         config.instances[sanitized] ??= {
             grafanaUrl: "http://localhost:3000",

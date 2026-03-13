@@ -113,7 +113,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let service: DashboardService | undefined;
 
   const missingProjectMessage = (): string =>
-    `No Grafana dashboard project found. Run "Initialize Project" or add ${PROJECT_CONFIG_FILE} inside the folder that should contain dashboards/ and instances/.`;
+    `No Grafana dashboard project found. Run "Initialize Project" or add ${PROJECT_CONFIG_FILE} inside the folder that should contain dashboards/, backups/, and renders/.`;
 
   const requireRepository = (): ProjectRepository => {
     if (!repository) {
@@ -296,7 +296,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       const initialInstanceName = await vscode.window.showInputBox({
         title: "Initial instance name",
-        prompt: "First instance folder to create under instances/",
+        prompt: "First instance name to add to workspace config",
         value: "example",
         validateInput: (value) => inputValidator(value, "Instance name"),
       });
@@ -536,7 +536,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         ? instanceName
         : await vscode.window.showInputBox({
             title: "Create instance",
-            prompt: "Instance folder name under instances/",
+            prompt: "Instance name to add to workspace config",
             validateInput: (value) => inputValidator(value, "Instance name"),
           });
       if (!rawValue) {
@@ -557,7 +557,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         ? targetName
         : await vscode.window.showInputBox({
             title: `Create deployment target for ${instance.name}`,
-            prompt: "Deployment target name under instances/<instance>/targets/",
+            prompt: "Deployment target name for this instance",
             value: "default",
             validateInput: (value) => inputValidator(value, "Deployment target name"),
           });

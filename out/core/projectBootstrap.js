@@ -33,7 +33,6 @@ async function initializeProjectDirectory(workspaceRootPath, relativeProjectPath
         version: 2,
         layout: {
             dashboardsDir: "dashboards",
-            instancesDir: "instances",
             backupsDir: "backups",
             rendersDir: "renders",
             maxBackups: repository.maxBackups,

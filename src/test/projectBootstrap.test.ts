@@ -26,11 +26,11 @@ test("initializeProjectDirectory creates marker file, layout and first instance"
     assert.equal(await repository.readTextFileIfExists(path.join(projectRoot, PROJECT_CONFIG_FILE)) !== undefined, true);
     assert.deepEqual(config.layout, {
       dashboardsDir: "dashboards",
-      instancesDir: "instances",
       backupsDir: "backups",
       rendersDir: "renders",
       maxBackups: 20,
     });
+    await assert.rejects(fs.stat(path.join(projectRoot, "instances")));
     assert.deepEqual(config.dashboards, []);
     assert.deepEqual(config.datasources, {});
     assert.deepEqual(config.instances, {

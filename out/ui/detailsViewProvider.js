@@ -495,7 +495,7 @@ class DetailsViewProvider {
   <section>
     <h2>Project</h2>
     <div class="hint">${escapeHtml(this.getMissingProjectMessage())}</div>
-    <div class="hint">Initialize a project to create <code>${escapeHtml(projectLocator_1.PROJECT_CONFIG_FILE)}</code>, <code>dashboards/</code>, <code>instances/</code>, and the first instance.</div>
+    <div class="hint">Initialize a project to create <code>${escapeHtml(projectLocator_1.PROJECT_CONFIG_FILE)}</code>, <code>dashboards/</code>, <code>backups/</code>, <code>renders/</code>, and the first instance.</div>
     <button data-command="initializeProject">Initialize Project</button>
   </section>
   <script nonce="${scriptNonce}">
