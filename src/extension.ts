@@ -218,6 +218,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       ? new ProjectRepository(layout, {
           resolveToken: async (instanceName?: string) =>
             instanceName ? secretStorage.getInstanceToken(layout.projectRootPath, instanceName) : undefined,
+          resolvePassword: async (instanceName?: string) =>
+            instanceName ? secretStorage.getInstancePassword(layout.projectRootPath, instanceName) : undefined,
         })
       : undefined;
     if (repository) {
@@ -333,6 +335,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         {
           resolveToken: async (instanceName?: string) =>
             instanceName ? secretStorage.getInstanceToken(nextRepository.projectRootPath, instanceName) : undefined,
+          resolvePassword: async (instanceName?: string) =>
+            instanceName ? secretStorage.getInstancePassword(nextRepository.projectRootPath, instanceName) : undefined,
         },
       );
       service = new DashboardService(repository, log);
@@ -561,6 +565,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
 
       await secretStorage.deleteInstanceToken(repository.projectRootPath, instance.name);
+      await secretStorage.deleteInstancePassword(repository.projectRootPath, instance.name);
       await repository.removeInstance(instance.name);
       selectionState.setInstance(undefined);
       selectionState.setTarget(undefined);
@@ -673,6 +678,41 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await secretStorage.deleteInstanceToken(repository.projectRootPath, instance.name);
       await refreshAll();
       void vscode.window.showInformationMessage(`Cleared stored token for ${instance.name}.`);
+    },
+    setInstancePassword: async () => {
+      const repository = requireRepository();
+      const instance = await requireInstance(selectionState.selectedInstanceName);
+      const password = await vscode.window.showInputBox({
+        title: `Set password for ${instance.name}`,
+        prompt: "Stored locally in VS Code Secret Storage for this project and instance",
+        password: true,
+        ignoreFocusOut: true,
+        validateInput: (value) => inputValidator(value, "Password"),
+      });
+      if (!password) {
+        return;
+      }
+
+      await secretStorage.setInstancePassword(repository.projectRootPath, instance.name, password.trim());
+      await requireService().autoMatchDatasourceCatalogForInstance(instance.name).catch(() => {});
+      await refreshAll();
+      void vscode.window.showInformationMessage(`Stored password for ${instance.name} in VS Code Secret Storage.`);
+    },
+    clearInstancePassword: async () => {
+      const repository = requireRepository();
+      const instance = await requireInstance(selectionState.selectedInstanceName);
+      const confirmed = await vscode.window.showWarningMessage(
+        `Clear stored password for ${instance.name}?`,
+        { modal: true },
+        "Clear",
+      );
+      if (confirmed !== "Clear") {
+        return;
+      }
+
+      await secretStorage.deleteInstancePassword(repository.projectRootPath, instance.name);
+      await refreshAll();
+      void vscode.window.showInformationMessage(`Cleared stored password for ${instance.name}.`);
     },
     saveOverride: async (
       instanceName: string,
@@ -1062,6 +1102,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand("grafanaDashboards.clearInstanceToken", (item?: InstanceTreeItem) =>
       clearInstanceToken(item),
+    ),
+    vscode.commands.registerCommand("grafanaDashboards.setInstancePassword", (item?: InstanceTreeItem) =>
+      setInstancePassword(item),
+    ),
+    vscode.commands.registerCommand("grafanaDashboards.clearInstancePassword", (item?: InstanceTreeItem) =>
+      clearInstancePassword(item),
     ),
     vscode.commands.registerCommand("grafanaDashboards.checkoutRevisionFromTree", (item?: DashboardRevisionTreeItem) =>
       checkoutRevisionFromTree(item),
@@ -1887,6 +1933,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       selectionState.setInstance(item.instance.name);
     }
     await actionHandlers.clearInstanceToken();
+  }
+
+  async function setInstancePassword(item?: InstanceTreeItem): Promise<void> {
+    if (item) {
+      selectionState.setInstance(item.instance.name);
+    }
+    await actionHandlers.setInstancePassword();
+  }
+
+  async function clearInstancePassword(item?: InstanceTreeItem): Promise<void> {
+    if (item) {
+      selectionState.setInstance(item.instance.name);
+    }
+    await actionHandlers.clearInstancePassword();
   }
 
   async function removeInstance(item?: InstanceTreeItem): Promise<void> {

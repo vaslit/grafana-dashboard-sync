@@ -10,6 +10,7 @@ export interface DashboardManifest {
 
 export interface WorkspaceInstanceConfig {
   grafanaUrl?: string;
+  grafanaUsername?: string;
   targets: Record<string, Record<string, never>>;
 }
 
@@ -151,7 +152,10 @@ export interface DeploymentTargetRecord {
 
 export interface EffectiveConnectionConfig {
   baseUrl: string;
-  token: string;
+  authKind: "bearer" | "basic";
+  token?: string;
+  username?: string;
+  password?: string;
   sourceLabel: string;
 }
 
@@ -380,6 +384,8 @@ export interface InstanceDetailsModel {
   hasConnection: boolean;
   tokenConfigured: boolean;
   tokenSourceLabel?: string;
+  passwordConfigured: boolean;
+  passwordSourceLabel?: string;
 }
 
 export interface DeploymentTargetDetailsModel {

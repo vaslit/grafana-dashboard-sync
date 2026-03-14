@@ -36,6 +36,8 @@ interface DetailsActionHandlers {
   savePlacement(instanceName: string, targetName: string, selectorName: string, values: Record<string, string>): Promise<void>;
   setInstanceToken(): Promise<void>;
   clearInstanceToken(): Promise<void>;
+  setInstancePassword(): Promise<void>;
+  clearInstancePassword(): Promise<void>;
   saveOverride(instanceName: string, targetName: string, selectorName: string, values: Record<string, string>): Promise<void>;
   createRevision(selectorName: string): Promise<void>;
   deployLatestRevision(selectorName: string, instanceName: string, targetName: string): Promise<void>;
@@ -684,10 +686,20 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
           GRAFANA_URL
           <input type="text" name="GRAFANA_URL" value="${escapeHtml(envValues.GRAFANA_URL ?? "")}" />
         </label>
-        <div class="small">Token: ${escapeHtml(instance.tokenConfigured ? `configured via ${instance.tokenSourceLabel ?? "Secret Storage"}` : "missing")}</div>
+        <label>
+          GRAFANA_USERNAME
+          <input type="text" name="GRAFANA_USERNAME" value="${escapeHtml(envValues.GRAFANA_USERNAME ?? "")}" />
+        </label>
+        <div class="small">Token auth: ${escapeHtml(instance.tokenConfigured ? `configured via ${instance.tokenSourceLabel ?? "Secret Storage"}` : "missing")}</div>
+        <div class="small">Password auth: ${escapeHtml(instance.passwordConfigured ? `configured via ${instance.passwordSourceLabel ?? "Secret Storage"}` : "missing")}</div>
+        <div class="small">Active auth mode: ${escapeHtml(instance.mergedConnection?.authKind ?? "(none)")}</div>
         <div class="small">Connection source: ${escapeHtml(instance.mergedConnection?.sourceLabel ?? "No valid connection yet")}</div>
         <div class="actions">
           <button type="submit">Save Instance Config</button>
+          <button type="button" class="secondary" data-command="setInstanceToken">Set Token</button>
+          <button type="button" class="secondary" data-command="clearInstanceToken">Clear Token</button>
+          <button type="button" class="secondary" data-command="setInstancePassword">Set Password</button>
+          <button type="button" class="secondary" data-command="clearInstancePassword">Clear Password</button>
         </div>
       </form>
     </section>`;
@@ -1118,6 +1130,12 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
         return;
       case "clearInstanceToken":
         await this.actions.clearInstanceToken();
+        return;
+      case "setInstancePassword":
+        await this.actions.setInstancePassword();
+        return;
+      case "clearInstancePassword":
+        await this.actions.clearInstancePassword();
         return;
       case "saveOverride":
         if (!dashboardSelector || !instanceName || !targetName) {

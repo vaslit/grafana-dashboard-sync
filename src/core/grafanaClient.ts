@@ -131,9 +131,14 @@ export class GrafanaClient implements GrafanaApi {
     const payload = body === undefined ? undefined : JSON.stringify(body);
     const client = url.protocol === "https:" ? https : http;
 
+    const authorizationHeader =
+      this.connection.authKind === "basic"
+        ? `Basic ${Buffer.from(`${this.connection.username ?? ""}:${this.connection.password ?? ""}`, "utf8").toString("base64")}`
+        : `Bearer ${this.connection.token ?? ""}`;
+
     const headers: Record<string, string | number> = {
       Accept: "application/json",
-      Authorization: `Bearer ${this.connection.token}`,
+      Authorization: authorizationHeader,
     };
 
     if (payload !== undefined) {

@@ -14,7 +14,7 @@ Usage documentation is available in [USAGE.md](USAGE.md).
 - Create and restore grouped raw backups for dashboards, targets, instances, and whole projects.
 - Manage deployment target placement overrides.
 - Rewrite datasource bindings per instance and per dashboard.
-- Store Grafana tokens in VS Code Secret Storage instead of plaintext files.
+- Store Grafana tokens or basic-auth passwords in VS Code Secret Storage instead of plaintext files.
 
 ## Workspace Layout
 
@@ -49,7 +49,9 @@ Instance and deployment-target definitions live in `.grafana-dashboard-workspace
 1. Open the folder that should contain your Grafana dashboard project in VS Code.
 2. Run `Grafana Sync: Initialize Grafana Dashboard Project` if the project structure does not exist yet.
 3. Create one or more instances in the `Instances` view.
-4. Set an API token for each instance with `Grafana Sync: Set Instance Token`.
+4. Configure authentication for each instance:
+   - `Grafana Sync: Set Instance Token`
+   - or `GRAFANA_USERNAME` + `Grafana Sync: Set Instance Password`
 5. Add dashboards to the manifest or pull them from a remote Grafana instance.
 6. Render and deploy using the activity bar views or command palette.
 
@@ -129,9 +131,14 @@ Example:
 
 When the selected instance is reachable, the `Details` panel can load remote datasource options for direct editing.
 
-## Tokens
+## Credentials
 
-Instance tokens are stored in VS Code Secret Storage. They are not written to workspace files.
+Supported instance authentication modes:
+
+- bearer token
+- basic auth with `GRAFANA_USERNAME` + password
+
+Tokens and passwords are stored in VS Code Secret Storage. They are not written to workspace files.
 
 ## Development
 

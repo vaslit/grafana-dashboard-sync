@@ -8,5 +8,6 @@ out/**/*.map
 .github/**
 AGENTS.md
 PUBLISHING.md
+DEVELOPMENT_AND_DELIVERY.pdf
 *.vsix
 node_modules/.cache/**

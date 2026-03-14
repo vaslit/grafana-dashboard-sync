@@ -42,8 +42,9 @@
 3. В дереве `Instances` создай instance:
    - `Grafana Sync: Create Instance`
 4. Для instance задай `GRAFANA_URL`.
-5. Сохрани token командой:
-   - `Grafana Sync: Set Instance Token`
+5. Настрой аутентификацию instance:
+   - либо `Grafana Sync: Set Instance Token`
+   - либо укажи `GRAFANA_USERNAME` и сохрани пароль командой `Grafana Sync: Set Instance Password`
 6. Создай deployment target:
    - `Grafana Sync: Create Deployment Target`
 7. Выбери dev target:
@@ -216,6 +217,27 @@ Backups особенно полезны перед deploy или перед ма
 - заранее видеть datasource metadata из prod
 - выполнять локальный `render` для `test/prod`
 - не давать разработчику случайно делать ручной deploy в shared environments
+
+## Аутентификация Instance
+
+Поддерживаются два режима:
+
+- bearer token
+- basic auth через `GRAFANA_USERNAME` и пароль
+
+Практические правила:
+
+- если у instance сохранен token, плагин использует его
+- если token не задан, но сохранены `GRAFANA_USERNAME` и пароль, плагин использует basic auth
+- пароль хранится в VS Code Secret Storage
+- username хранится в конфигурации проекта
+
+Команды:
+
+- `Grafana Sync: Set Instance Token`
+- `Grafana Sync: Clear Instance Token`
+- `Grafana Sync: Set Instance Password`
+- `Grafana Sync: Clear Instance Password`
 
 ## Типовые Ошибки
 

@@ -30,6 +30,7 @@ test("loadConnectionConfig uses workspace config instance settings", async () =>
 
     const connection = await repositoryWithSecret.loadConnectionConfig("prod");
     assert.equal(connection.baseUrl, "http://prod");
+    assert.equal(connection.authKind, "bearer");
     assert.equal(connection.token, "root-token");
     assert.equal(connection.sourceLabel, ".grafana-dashboard-workspace.json -> instances.prod");
   });
@@ -50,7 +51,32 @@ test("loadConnectionConfig uses token resolver for instance secret", async () =>
 
     const connection = await repository.loadConnectionConfig("prod");
     assert.equal(connection.baseUrl, "http://prod");
+    assert.equal(connection.authKind, "bearer");
     assert.equal(connection.token, "secret-token");
+  } finally {
+    await fs.rm(rootPath, { recursive: true, force: true });
+  }
+});
+
+test("loadConnectionConfig falls back to basic auth when username and password are configured", async () => {
+  const rootPath = await fs.mkdtemp(path.join(os.tmpdir(), "grafana-dashboard-basic-auth-"));
+  const repository = new ProjectRepository(rootPath, {
+    resolvePassword: async (instanceName?: string) => (instanceName === "prod" ? "secret-password" : undefined),
+  });
+
+  try {
+    await repository.ensureProjectLayout();
+    await repository.createInstance("prod");
+    await repository.saveInstanceEnvValues("prod", {
+      GRAFANA_URL: "http://prod",
+      GRAFANA_USERNAME: "grafana-user",
+    });
+
+    const connection = await repository.loadConnectionConfig("prod");
+    assert.equal(connection.baseUrl, "http://prod");
+    assert.equal(connection.authKind, "basic");
+    assert.equal(connection.username, "grafana-user");
+    assert.equal(connection.password, "secret-password");
   } finally {
     await fs.rm(rootPath, { recursive: true, force: true });
   }
@@ -173,11 +199,14 @@ test("saveInstanceEnvValues strips GRAFANA_TOKEN from stored file", async () => 
     await repository.createInstance("prod");
     await repository.saveInstanceEnvValues("prod", {
       GRAFANA_URL: "http://prod",
+      GRAFANA_USERNAME: "grafana-user",
       GRAFANA_TOKEN: "should-not-be-written",
+      GRAFANA_PASSWORD: "should-not-be-written",
     });
 
     assert.deepEqual((await repository.loadWorkspaceConfig()).instances.prod, {
       grafanaUrl: "http://prod",
+      grafanaUsername: "grafana-user",
       targets: {
         default: {},
       },

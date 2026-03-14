@@ -2,7 +2,7 @@
   "name": "grafana-dashboard-sync",
   "displayName": "Grafana Dashboard Sync",
   "description": "Manage Grafana dashboards from VS Code with pull, render, deploy, backup, and datasource mapping workflows.",
-  "version": "0.8.11",
+  "version": "0.8.12",
   "publisher": "vaslit",
   "license": "MIT",
   "repository": {
@@ -45,6 +45,8 @@
     "onCommand:grafanaDashboards.pickPlacementFolder",
     "onCommand:grafanaDashboards.setInstanceToken",
     "onCommand:grafanaDashboards.clearInstanceToken",
+    "onCommand:grafanaDashboards.setInstancePassword",
+    "onCommand:grafanaDashboards.clearInstancePassword",
     "onCommand:grafanaDashboards.checkoutRevisionFromTree",
     "onCommand:grafanaDashboards.setTargetRevisionFromTree",
     "onCommand:grafanaDashboards.deployRevisionToActiveTargetFromTree",
@@ -117,6 +119,14 @@
       {
         "command": "grafanaDashboards.clearInstanceToken",
         "title": "Grafana Sync: Clear Instance Token"
+      },
+      {
+        "command": "grafanaDashboards.setInstancePassword",
+        "title": "Grafana Sync: Set Instance Password"
+      },
+      {
+        "command": "grafanaDashboards.clearInstancePassword",
+        "title": "Grafana Sync: Clear Instance Password"
       },
       {
         "command": "grafanaDashboards.checkoutRevisionFromTree",
@@ -436,6 +446,16 @@
           "command": "grafanaDashboards.clearInstanceToken",
           "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
           "group": "navigation@8"
+        },
+        {
+          "command": "grafanaDashboards.setInstancePassword",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
+          "group": "navigation@8.1"
+        },
+        {
+          "command": "grafanaDashboards.clearInstancePassword",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
+          "group": "navigation@8.2"
         },
         {
           "command": "grafanaDashboards.removeInstance",

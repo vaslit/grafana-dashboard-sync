@@ -93,6 +93,7 @@ async function copyDirectoryTree(
 
 interface ProjectRepositoryOptions {
   resolveToken?: (instanceName?: string) => Promise<string | undefined>;
+  resolvePassword?: (instanceName?: string) => Promise<string | undefined>;
 }
 
 export const DEFAULT_DEPLOYMENT_TARGET = "default";
@@ -267,6 +268,9 @@ function validateWorkspaceProjectConfig(config: WorkspaceProjectConfig, filePath
     if (instanceConfig.grafanaUrl !== undefined && typeof instanceConfig.grafanaUrl !== "string") {
       throw new Error(`Invalid workspace config grafanaUrl: ${filePath}`);
     }
+    if (instanceConfig.grafanaUsername !== undefined && typeof instanceConfig.grafanaUsername !== "string") {
+      throw new Error(`Invalid workspace config grafanaUsername: ${filePath}`);
+    }
     if (!instanceConfig.targets || typeof instanceConfig.targets !== "object" || Array.isArray(instanceConfig.targets)) {
       throw new Error(`Invalid workspace config targets: ${filePath}`);
     }
@@ -277,6 +281,7 @@ function validateWorkspaceProjectConfig(config: WorkspaceProjectConfig, filePath
     }
     normalizedInstances[instanceName] = {
       ...(instanceConfig.grafanaUrl ? { grafanaUrl: instanceConfig.grafanaUrl } : {}),
+      ...(instanceConfig.grafanaUsername ? { grafanaUsername: instanceConfig.grafanaUsername } : {}),
       targets: Object.fromEntries(Object.keys(instanceConfig.targets).map((targetName) => [targetName, {}])),
     };
   }
@@ -568,6 +573,7 @@ export class ProjectRepository {
   readonly rootEnvPath: string;
   readonly maxBackups: number;
   private readonly resolveToken: (instanceName?: string) => Promise<string | undefined>;
+  private readonly resolvePassword: (instanceName?: string) => Promise<string | undefined>;
 
   constructor(layoutOrRootPath: ProjectLayout | string, options?: ProjectRepositoryOptions) {
     const layout = typeof layoutOrRootPath === "string" ? defaultProjectLayout(layoutOrRootPath) : layoutOrRootPath;
@@ -585,6 +591,7 @@ export class ProjectRepository {
     this.rootEnvPath = layout.rootEnvPath;
     this.maxBackups = layout.maxBackups;
     this.resolveToken = options?.resolveToken ?? (async () => undefined);
+    this.resolvePassword = options?.resolvePassword ?? (async () => undefined);
   }
 
   async ensureProjectLayout(): Promise<void> {
@@ -1307,6 +1314,7 @@ export class ProjectRepository {
 
     return {
       ...(instance.grafanaUrl ? { GRAFANA_URL: instance.grafanaUrl } : {}),
+      ...(instance.grafanaUsername ? { GRAFANA_USERNAME: instance.grafanaUsername } : {}),
     };
   }
 
@@ -1317,20 +1325,35 @@ export class ProjectRepository {
 
     const instanceValues = await this.loadInstanceEnvValues(instanceName);
     const baseUrl = instanceValues.GRAFANA_URL?.trim();
+    const username = instanceValues.GRAFANA_USERNAME?.trim();
     const token = (await this.resolveToken(instanceName))?.trim();
+    const password = (await this.resolvePassword(instanceName))?.trim();
 
     if (!baseUrl) {
       throw new Error("GRAFANA_URL is not configured in workspace config for this instance.");
     }
-    if (!token) {
-      throw new Error("Grafana token is not configured. Use Set Instance Token.");
+    if (token) {
+      return {
+        baseUrl: baseUrl.replace(/\/+$/, ""),
+        authKind: "bearer",
+        token,
+        sourceLabel: `${PROJECT_CONFIG_FILE} -> instances.${instanceName}`,
+      };
+    }
+    if (username && password) {
+      return {
+        baseUrl: baseUrl.replace(/\/+$/, ""),
+        authKind: "basic",
+        username,
+        password,
+        sourceLabel: `${PROJECT_CONFIG_FILE} -> instances.${instanceName}`,
+      };
+    }
+    if (username && !password) {
+      throw new Error("Grafana password is not configured. Use Set Instance Password.");
     }
 
-    return {
-      baseUrl: baseUrl.replace(/\/+$/, ""),
-      token,
-      sourceLabel: `${PROJECT_CONFIG_FILE} -> instances.${instanceName}`,
-    };
+    throw new Error("Grafana credentials are not configured. Use Set Instance Token or configure username/password.");
   }
 
   async saveInstanceEnvValues(instanceName: string, values: Record<string, string>): Promise<void> {
@@ -1343,6 +1366,9 @@ export class ProjectRepository {
     config.instances[instanceName] = {
       ...instance,
       ...(values.GRAFANA_URL?.trim() ? { grafanaUrl: values.GRAFANA_URL.trim() } : { grafanaUrl: undefined }),
+      ...(values.GRAFANA_USERNAME?.trim()
+        ? { grafanaUsername: values.GRAFANA_USERNAME.trim() }
+        : { grafanaUsername: undefined }),
     };
     await this.saveWorkspaceConfig(config);
   }
@@ -1612,7 +1638,11 @@ export class ProjectRepository {
 
     const envValues = await this.loadInstanceEnvValues(instanceName);
     const tokenFromSecret = (await this.resolveToken(instanceName))?.trim();
+    const passwordFromSecret = (await this.resolvePassword(instanceName))?.trim();
     const tokenSourceLabel = tokenFromSecret
+      ? "VS Code Secret Storage"
+      : undefined;
+    const passwordSourceLabel = passwordFromSecret
       ? "VS Code Secret Storage"
       : undefined;
     let mergedConnection: EffectiveConnectionConfig | undefined;
@@ -1630,6 +1660,8 @@ export class ProjectRepository {
       hasConnection: Boolean(mergedConnection),
       tokenConfigured: Boolean(tokenSourceLabel),
       tokenSourceLabel,
+      passwordConfigured: Boolean(passwordSourceLabel),
+      passwordSourceLabel,
     };
   }
 
