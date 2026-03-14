@@ -673,9 +673,6 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
         </label>
         <div class="actions">
           <button type="submit" data-revision-action="checkoutRevision">Checkout Selected Revision</button>
-          <button type="button" class="secondary" data-command="createRevision">Create Revision From Working Copy</button>
-          <button type="submit" class="secondary" data-revision-action="deployRevision"${instance && target ? "" : " disabled"}>Deploy Selected Revision</button>
-          <button type="button" class="secondary" data-command="deployLatestRevision"${instance && target ? "" : " disabled"}>Deploy Latest Revision</button>
         </div>
       </form>
     </section>`;
