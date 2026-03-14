@@ -205,8 +205,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const instances = await repository.listInstances();
     if (instances.length === 1) {
-      const defaultTarget = await repository.deploymentTargetByName(instances[0].name, DEFAULT_DEPLOYMENT_TARGET);
-      selectionState.setActiveTarget(instances[0].name, defaultTarget?.name);
+      const targets = await repository.listDeploymentTargets(instances[0].name);
+      selectionState.setActiveTarget(instances[0].name, targets[0]?.name);
     } else {
       selectionState.setActiveTarget(undefined, undefined);
     }
@@ -518,12 +518,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const repository = requireRepository();
       const service = requireService();
       const instance = await requireInstance(instanceName || selectionState.selectedInstanceName);
+      const existingTargets = await repository.listDeploymentTargets(instance.name);
       const rawValue = targetName.trim()
         ? targetName
         : await vscode.window.showInputBox({
             title: `Create deployment target for ${instance.name}`,
             prompt: "Deployment target name for this instance",
-            value: "default",
+            value: existingTargets.length === 0 ? DEFAULT_DEPLOYMENT_TARGET : "",
             validateInput: (value) => inputValidator(value, "Deployment target name"),
           });
       if (!rawValue) {
@@ -548,9 +549,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
 
       await repository.removeDeploymentTarget(target.instanceName, target.name);
-      selectionState.setTarget(undefined);
+      const remainingTargets = await repository.listDeploymentTargets(target.instanceName);
+      selectionState.setTarget(remainingTargets[0]?.name);
       await refreshAll();
       void vscode.window.showInformationMessage(`Removed deployment target ${target.instanceName}/${target.name}.`);
+    },
+    renameDeploymentTarget: async () => {
+      const repository = requireRepository();
+      const target = await requireDeploymentTarget(selectionState.selectedInstanceName, selectionState.selectedTargetName);
+      const nextName = await vscode.window.showInputBox({
+        title: `Rename deployment target ${target.instanceName}/${target.name}`,
+        prompt: "New deployment target name",
+        value: target.name,
+        validateInput: (value) => inputValidator(value, "Deployment target name"),
+      });
+      if (!nextName) {
+        return;
+      }
+
+      const renamed = await repository.renameDeploymentTarget(target.instanceName, target.name, nextName);
+      selectionState.setInstance(renamed.instanceName);
+      selectionState.setTarget(renamed.name);
+      selectionState.setActiveTarget(renamed.instanceName, renamed.name);
+      await refreshAll();
+      void vscode.window.showInformationMessage(`Renamed deployment target to ${renamed.instanceName}/${renamed.name}.`);
     },
     removeInstance: async () => {
       const repository = requireRepository();
@@ -1097,6 +1119,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("grafanaDashboards.removeDeploymentTarget", (item?: DeploymentTargetTreeItem) =>
       removeDeploymentTarget(item),
     ),
+    vscode.commands.registerCommand("grafanaDashboards.renameDeploymentTarget", (item?: DeploymentTargetTreeItem) =>
+      renameDeploymentTarget(item),
+    ),
     vscode.commands.registerCommand("grafanaDashboards.setInstanceToken", (item?: InstanceTreeItem) =>
       setInstanceToken(item),
     ),
@@ -1217,6 +1242,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     return target;
+  }
+
+  async function firstDeploymentTarget(instanceName: string): Promise<DeploymentTargetRecord> {
+    const repository = requireRepository();
+    const targets = await repository.listDeploymentTargets(instanceName);
+    const firstTarget = targets[0];
+    if (!firstTarget) {
+      throw new Error(`Deployment target not found for ${instanceName}.`);
+    }
+    return firstTarget;
   }
 
   async function requireBackup(backupName?: string): Promise<BackupRecord> {
@@ -1844,7 +1879,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       item instanceof DeploymentTargetTreeItem
         ? item.target
         : item instanceof InstanceTreeItem
-          ? await requireDeploymentTarget(item.instance.name, DEFAULT_DEPLOYMENT_TARGET)
+          ? await firstDeploymentTarget(item.instance.name)
           : await requireDeploymentTarget();
     const record = await requireDashboardRecord();
     const overridePath = repository.dashboardOverridesFilePath(record.entry);
@@ -1963,6 +1998,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       selectionState.setTarget(item.target.name);
     }
     await actionHandlers.removeDeploymentTarget();
+  }
+
+  async function renameDeploymentTarget(item?: DeploymentTargetTreeItem): Promise<void> {
+    if (item) {
+      selectionState.setInstance(item.target.instanceName);
+      selectionState.setTarget(item.target.name);
+    }
+    await actionHandlers.renameDeploymentTarget();
   }
 
   async function restoreBackupCommand(

@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 
 import { DashboardService } from "../core/dashboardService";
-import { DEFAULT_DEPLOYMENT_TARGET, ProjectRepository } from "../core/repository";
+import { ProjectRepository } from "../core/repository";
 import { DashboardRecord, DeploymentTargetRecord, InstanceRecord } from "../core/types";
 
 type InstanceHealthState =
@@ -73,7 +73,7 @@ export class DeploymentTargetTreeItem extends vscode.TreeItem {
     );
     this.contextValue = "grafanaDeploymentTarget";
     this.description = [
-      target.name === DEFAULT_DEPLOYMENT_TARGET ? "default" : "target",
+      "target",
       `${dashboardCount} dashboard${dashboardCount === 1 ? "" : "s"}`,
     ].join(", ");
     this.tooltip = new vscode.MarkdownString(
@@ -83,7 +83,7 @@ export class DeploymentTargetTreeItem extends vscode.TreeItem {
         `Dashboards: ${dashboardCount}`,
       ].join("\n"),
     );
-    this.iconPath = new vscode.ThemeIcon(target.name === DEFAULT_DEPLOYMENT_TARGET ? "target" : "symbol-field");
+    this.iconPath = new vscode.ThemeIcon("symbol-field");
   }
 }
 

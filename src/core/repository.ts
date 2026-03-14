@@ -107,11 +107,6 @@ function toRelativeConfigPath(projectRootPath: string, absolutePath: string): st
   return relativePath || ".";
 }
 
-function targetNameFromOverrideTargetKey(targetKey: string): string {
-  const slashIndex = targetKey.indexOf("/");
-  return slashIndex >= 0 ? targetKey.slice(slashIndex + 1) : targetKey;
-}
-
 function normalizeDashboardTargetRevisionState(
   rawState: Record<string, unknown>,
   filePath: string,
@@ -385,12 +380,6 @@ function validateDashboardFolderOverridesFile(
         filePath,
         targetKey,
       );
-      if (
-        normalizedOverride.dashboardUid !== undefined &&
-        targetNameFromOverrideTargetKey(targetKey) === DEFAULT_DEPLOYMENT_TARGET
-      ) {
-        throw new Error(`Invalid dashboard overrides file: ${filePath}`);
-      }
       targets[targetKey] = normalizedOverride;
     }
   }
@@ -1283,14 +1272,96 @@ export class ProjectRepository {
     };
   }
 
+  async renameDeploymentTarget(
+    instanceName: string,
+    targetName: string,
+    nextTargetName: string,
+  ): Promise<DeploymentTargetRecord> {
+    const target = await this.deploymentTargetByName(instanceName, targetName);
+    if (!target) {
+      throw new Error(`Deployment target not found: ${instanceName}/${targetName}`);
+    }
+
+    const sanitized = nextTargetName.trim();
+    if (!sanitized) {
+      throw new Error("Deployment target name must not be empty.");
+    }
+    if (sanitized === targetName) {
+      return {
+        instanceName,
+        name: sanitized,
+        dirPath: `${this.workspaceConfigPath}#instances.${instanceName}.targets.${sanitized}`,
+      };
+    }
+
+    const config = await this.loadWorkspaceConfig();
+    const instance = config.instances[instanceName];
+    if (!instance) {
+      throw new Error(`Instance not found: ${instanceName}`);
+    }
+    if (instance.targets[sanitized]) {
+      throw new Error(`Deployment target already exists: ${instanceName}/${sanitized}`);
+    }
+
+    instance.targets[sanitized] = instance.targets[targetName] ?? {};
+    delete instance.targets[targetName];
+    if (config.devTarget?.instanceName === instanceName && config.devTarget.targetName === targetName) {
+      config.devTarget.targetName = sanitized;
+    }
+    await this.saveWorkspaceConfig(config);
+
+    const currentKey = this.dashboardOverrideTargetKey(instanceName, targetName);
+    const nextKey = this.dashboardOverrideTargetKey(instanceName, sanitized);
+    const records = await this.listDashboardRecords();
+    const processedOverrideFiles = new Set<string>();
+
+    for (const record of records) {
+      const overrideFilePath = this.dashboardOverridesFilePath(record.entry);
+      if (processedOverrideFiles.has(overrideFilePath)) {
+        continue;
+      }
+      processedOverrideFiles.add(overrideFilePath);
+
+      const file = await this.readDashboardOverridesFile(record.entry);
+      if (!file) {
+        continue;
+      }
+
+      let changed = false;
+      for (const dashboardEntry of Object.values(file.dashboards)) {
+        const targetState = dashboardEntry.targets[currentKey];
+        if (!targetState) {
+          continue;
+        }
+        if (dashboardEntry.targets[nextKey]) {
+          throw new Error(`Target override key already exists in ${overrideFilePath}: ${nextKey}`);
+        }
+        dashboardEntry.targets[nextKey] = targetState;
+        delete dashboardEntry.targets[currentKey];
+        changed = true;
+      }
+
+      if (changed) {
+        await this.saveDashboardOverridesFile(record.entry, file);
+      }
+    }
+
+    return {
+      instanceName,
+      name: sanitized,
+      dirPath: `${this.workspaceConfigPath}#instances.${instanceName}.targets.${sanitized}`,
+    };
+  }
+
   async removeDeploymentTarget(instanceName: string, targetName: string): Promise<void> {
     const target = await this.deploymentTargetByName(instanceName, targetName);
     if (!target) {
       throw new Error(`Deployment target not found: ${instanceName}/${targetName}`);
     }
 
-    if (target.name === DEFAULT_DEPLOYMENT_TARGET) {
-      throw new Error("Default deployment target cannot be removed.");
+    const targets = await this.listDeploymentTargets(instanceName);
+    if (targets.length <= 1) {
+      throw new Error("Cannot remove the last remaining deployment target.");
     }
 
     const config = await this.loadWorkspaceConfig();

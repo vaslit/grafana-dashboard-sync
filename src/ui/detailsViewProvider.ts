@@ -961,8 +961,8 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
       <h2>Placement</h2>
       <div class="hint">Configure target folder placement for <strong>${escapeHtml(instance.instance.name)}/${escapeHtml(target.target.name)}</strong>.</div>
       <div class="small">Base dashboard UID: ${escapeHtml(placement?.baseDashboardUid ?? dashboard.entry.uid)}</div>
-      <div class="small">Target dashboard UID: ${escapeHtml(placement?.overrideDashboardUid ?? (target.target.name === "default" ? "(not used for default)" : "(will be generated)"))}</div>
-      <div class="small">Effective dashboard UID: ${escapeHtml(placement?.effectiveDashboardUid ?? (target.target.name === "default" ? dashboard.entry.uid : "(pending generation)"))}</div>
+      <div class="small">Target dashboard UID: ${escapeHtml(placement?.overrideDashboardUid ?? "(not set, base UID will be used)")}</div>
+      <div class="small">Effective dashboard UID: ${escapeHtml(placement?.effectiveDashboardUid ?? dashboard.entry.uid)}</div>
       <div class="small">Base folder path: ${escapeHtml(placement?.baseFolderPath ?? "(root)")}</div>
       <form id="placement-form" class="grid">
         <div style="display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center;">

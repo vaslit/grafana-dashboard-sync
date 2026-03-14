@@ -401,7 +401,7 @@ test("pullDashboards does not create a new revision when only managed constant o
   });
 });
 
-test("pullDashboards rejects mismatched dashboard uid for default target", async () => {
+test("pullDashboards accepts mismatched remote dashboard uid and normalizes the local snapshot uid", async () => {
   await withTempProject(async (repository, entry) => {
     await repository.createInstance("prod");
     await repository.writeJsonFile(repository.dashboardPath(entry), {
@@ -422,10 +422,10 @@ test("pullDashboards rejects mismatched dashboard uid for default target", async
     );
     const service = new DashboardService(repository, logger(), async () => client);
 
-    await assert.rejects(
-      service.pullDashboards([entry], "prod", "default"),
-      /Pulled dashboard UID mismatch/,
-    );
+    await service.pullDashboards([entry], "prod", "default");
+
+    const dashboard = await repository.readJsonFile<Record<string, unknown>>(repository.dashboardPath(entry));
+    assert.equal(dashboard.uid, entry.uid);
   });
 });
 

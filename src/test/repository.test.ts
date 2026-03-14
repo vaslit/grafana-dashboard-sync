@@ -125,7 +125,7 @@ test("migrateDeploymentTargets is disabled for version 4 projects", async () => 
   });
 });
 
-test("saveTargetOverrideFile rejects dashboardUid on default target", async () => {
+test("saveTargetOverrideFile allows dashboardUid on target named default", async () => {
   await withTempProject(async (_rootPath, repository) => {
     const entry = {
       name: "sync-status",
@@ -136,13 +136,57 @@ test("saveTargetOverrideFile rejects dashboardUid on default target", async () =
     await repository.saveManifest({ dashboards: [entry] });
     await repository.createInstance("prod");
 
+    await repository.saveTargetOverrideFile("prod", "default", entry, {
+      dashboardUid: "allowed-now",
+      revisionStates: {},
+    });
+
+    const saved = await repository.readTargetOverrideFile("prod", "default", entry);
+    assert.equal(saved?.dashboardUid, "allowed-now");
+  });
+});
+
+test("removeDeploymentTarget rejects removing the last remaining target", async () => {
+  await withTempProject(async (_rootPath, repository) => {
+    await repository.createInstance("prod");
     await assert.rejects(
-      repository.saveTargetOverrideFile("prod", "default", entry, {
-        dashboardUid: "not-allowed",
-        revisionStates: {},
-      }),
-      /Invalid dashboard overrides file/,
+      repository.removeDeploymentTarget("prod", "default"),
+      /Cannot remove the last remaining deployment target/,
     );
+  });
+});
+
+test("renameDeploymentTarget updates workspace config and override keys", async () => {
+  await withTempProject(async (_rootPath, repository) => {
+    const entry = {
+      name: "sync-status",
+      uid: "uid-1",
+      path: "integration/status.json",
+    };
+
+    await repository.saveManifest({ dashboards: [entry] });
+    await repository.createInstance("prod");
+    await repository.saveTargetOverrideFile("prod", "default", entry, {
+      dashboardUid: "uid-dev",
+      revisionStates: {
+        rev1: {
+          variableOverrides: {
+            site: "rnd",
+          },
+          datasourceBindings: {},
+        },
+      },
+    });
+
+    const renamed = await repository.renameDeploymentTarget("prod", "default", "dev");
+
+    assert.equal(renamed.name, "dev");
+    const config = await repository.loadWorkspaceConfig();
+    assert.equal(config.instances.prod?.targets.default, undefined);
+    assert.deepEqual(config.instances.prod?.targets.dev, {});
+    const saved = await repository.readTextFileIfExists(repository.dashboardOverridesFilePath(entry));
+    assert.match(saved ?? "", /"prod\/dev"/);
+    assert.doesNotMatch(saved ?? "", /"prod\/default"/);
   });
 });
 

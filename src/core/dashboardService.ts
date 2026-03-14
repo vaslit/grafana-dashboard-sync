@@ -108,10 +108,6 @@ function normalizeFolderPath(pathValue: string | undefined): string | undefined 
   return normalized || undefined;
 }
 
-function isDefaultTarget(targetName: string): boolean {
-  return targetName === DEFAULT_DEPLOYMENT_TARGET;
-}
-
 function buildFolderPathByUid(folderUid: string, folders: GrafanaFolder[]): string | undefined {
   const folderMap = new Map(folders.map((folder) => [folder.uid, folder]));
   const segments: string[] = [];
@@ -336,13 +332,6 @@ export class DashboardService {
         ...(existingState?.revisionStates ?? {}),
       },
     };
-
-    if (!isDefaultTarget(targetName) && !nextState.dashboardUid) {
-      nextState.dashboardUid = randomUUID();
-    }
-    if (isDefaultTarget(targetName)) {
-      delete nextState.dashboardUid;
-    }
 
     if (stableJsonStringify(nextState) !== stableJsonStringify(existingState ?? {})) {
       await sourceRepository.saveTargetOverrideFile(instanceName, targetName, entry, nextState);
@@ -1359,12 +1348,8 @@ export class DashboardService {
     targetName: string,
     overrideFile: DashboardTargetState | undefined,
   ): string | undefined {
-    if (isDefaultTarget(targetName)) {
-      return entry.uid;
-    }
-
     const dashboardUid = overrideFile?.dashboardUid?.trim();
-    return dashboardUid || undefined;
+    return dashboardUid || entry.uid;
   }
 
   private async materializeDashboardUidForTarget(
@@ -1374,23 +1359,7 @@ export class DashboardService {
     entry: DashboardManifestEntry,
   ): Promise<DashboardTargetState | undefined> {
     const existingOverride = await sourceRepository.readTargetOverrideFile(instanceName, targetName, entry);
-    if (isDefaultTarget(targetName)) {
-      return existingOverride;
-    }
-
-    const existingDashboardUid = existingOverride?.dashboardUid?.trim();
-    if (existingDashboardUid) {
-      return existingOverride;
-    }
-
-    const nextOverride: DashboardTargetState = {
-      dashboardUid: randomUUID(),
-      ...(existingOverride?.folderPath ? { folderPath: existingOverride.folderPath } : {}),
-      ...(existingOverride?.currentRevisionId ? { currentRevisionId: existingOverride.currentRevisionId } : {}),
-      revisionStates: existingOverride?.revisionStates ?? {},
-    };
-    await sourceRepository.saveTargetOverrideFile(instanceName, targetName, entry, nextOverride);
-    return nextOverride;
+    return existingOverride;
   }
 
   private async materializeDashboardUidsForInstance(
@@ -1401,12 +1370,21 @@ export class DashboardService {
     const records = await sourceRepository.listDashboardRecords();
 
     for (const target of targets) {
-      if (isDefaultTarget(target.name)) {
-        continue;
-      }
-
       for (const record of records) {
-        await this.materializeDashboardUidForTarget(sourceRepository, target.instanceName, target.name, record.entry);
+        const overrideFile = await this.materializeDashboardUidForTarget(
+          sourceRepository,
+          target.instanceName,
+          target.name,
+          record.entry,
+        );
+        if (overrideFile?.dashboardUid) {
+          continue;
+        }
+        await sourceRepository.saveTargetOverrideFile(target.instanceName, target.name, record.entry, {
+          ...overrideFile,
+          dashboardUid: randomUUID(),
+          revisionStates: overrideFile?.revisionStates ?? {},
+        });
       }
     }
   }
@@ -1564,11 +1542,6 @@ export class DashboardService {
 
       const response = await client.getDashboardByUid(effectiveDashboardUid);
       const pulledDashboard = sanitizeDashboardForStorage(response.dashboard);
-      if (isDefaultTarget(targetName) && pulledDashboard.uid !== entry.uid) {
-        throw new Error(
-          `Pulled dashboard UID mismatch for ${selectorName} on ${instanceName}/${targetName}: expected ${entry.uid}, got ${String(pulledDashboard.uid ?? "")}.`,
-        );
-      }
 
       const datasourceDescriptors = buildDashboardDatasourceDescriptors(pulledDashboard, datasources);
       const nextCatalogState = mergePulledDatasourceCatalog(
@@ -1984,6 +1957,7 @@ export class DashboardService {
       if (!currentTargetState) {
         continue;
       }
+      currentTargetState.targetState.dashboardUid ??= randomUUID();
       await this.repository.saveTargetOverrideFile(instanceName, targetName, record.entry, currentTargetState.targetState);
     }
   }
