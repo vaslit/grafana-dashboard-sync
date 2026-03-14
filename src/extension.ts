@@ -246,7 +246,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   await resolveProject();
 
   const dashboardsProvider = new DashboardTreeProvider(() => repository, () => service, currentActiveTarget, missingProjectMessage);
-  const instancesProvider = new InstanceTreeProvider(() => repository, currentActiveTarget, missingProjectMessage);
+  const instancesProvider = new InstanceTreeProvider(() => repository, () => service, currentActiveTarget, missingProjectMessage);
   const backupsProvider = new BackupTreeProvider(() => repository, missingProjectMessage);
 
   const dashboardTreeView = vscode.window.createTreeView("grafanaDashboards.dashboards", {

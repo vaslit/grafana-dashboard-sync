@@ -1,7 +1,13 @@
 import * as vscode from "vscode";
 
+import { DashboardService } from "../core/dashboardService";
 import { DEFAULT_DEPLOYMENT_TARGET, ProjectRepository } from "../core/repository";
 import { DashboardRecord, DeploymentTargetRecord, InstanceRecord } from "../core/types";
+
+type InstanceHealthState =
+  | { kind: "ok" }
+  | { kind: "no-auth"; detail: string }
+  | { kind: "error"; detail: string };
 
 export class DevTargetTreeItem extends vscode.TreeItem {
   constructor(instanceName?: string, targetName?: string) {
@@ -29,11 +35,12 @@ export class InstanceTreeItem extends vscode.TreeItem {
   constructor(
     readonly instance: InstanceRecord,
     readonly targetCount: number,
+    readonly health: InstanceHealthState,
   ) {
     super(instance.name, vscode.TreeItemCollapsibleState.Expanded);
     this.contextValue = "grafanaInstance";
     this.description = [
-      instance.envExists ? "env" : "no env",
+      instanceHealthLabel(health),
       `${targetCount} target${targetCount === 1 ? "" : "s"}`,
     ].join(", ");
     this.tooltip = new vscode.MarkdownString(
@@ -41,10 +48,17 @@ export class InstanceTreeItem extends vscode.TreeItem {
         `**${instance.name}**`,
         "",
         `Env: ${instance.envExists ? "present" : "missing"}`,
+        `Status: ${instanceHealthLabel(health)}`,
+        ...(health.kind !== "ok" ? [`Detail: ${health.detail}`] : []),
         `Targets: ${targetCount}`,
       ].join("\n"),
     );
-    this.iconPath = new vscode.ThemeIcon(instance.envExists ? "server" : "warning");
+    this.iconPath =
+      health.kind === "ok"
+        ? new vscode.ThemeIcon("server")
+        : health.kind === "no-auth"
+          ? new vscode.ThemeIcon("circle-slash", new vscode.ThemeColor("disabledForeground"))
+          : new vscode.ThemeIcon("error", new vscode.ThemeColor("errorForeground"));
   }
 }
 
@@ -105,16 +119,19 @@ class InstancePlaceholderItem extends vscode.TreeItem {
 
 export class InstanceTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   private readonly changeEmitter = new vscode.EventEmitter<void>();
+  private readonly instanceHealthCache = new Map<string, Promise<InstanceHealthState>>();
 
   readonly onDidChangeTreeData = this.changeEmitter.event;
 
   constructor(
     private readonly getRepository: () => ProjectRepository | undefined,
+    private readonly getService: () => DashboardService | undefined,
     private readonly getActiveTarget: () => { instanceName?: string; targetName?: string },
     private readonly getMissingProjectMessage: () => string,
   ) {}
 
   refresh(): void {
+    this.instanceHealthCache.clear();
     this.changeEmitter.fire();
   }
 
@@ -157,7 +174,8 @@ export class InstanceTreeProvider implements vscode.TreeDataProvider<vscode.Tree
       const items = await Promise.all(
         instances.map(async (instance) => {
           const targets = await repository.listDeploymentTargets(instance.name);
-          return new InstanceTreeItem(instance, targets.length);
+          const health = await this.instanceHealth(repository, instance);
+          return new InstanceTreeItem(instance, targets.length, health);
         }),
       );
       return [
@@ -197,5 +215,65 @@ export class InstanceTreeProvider implements vscode.TreeDataProvider<vscode.Tree
     }
 
     return records.map((record) => new InstanceTargetDashboardTreeItem(target, record));
+  }
+
+  private async instanceHealth(repository: ProjectRepository, instance: InstanceRecord): Promise<InstanceHealthState> {
+    const cached = this.instanceHealthCache.get(instance.name);
+    if (cached) {
+      return cached;
+    }
+
+    const next = this.computeInstanceHealth(repository, instance);
+    this.instanceHealthCache.set(instance.name, next);
+    return next;
+  }
+
+  private async computeInstanceHealth(repository: ProjectRepository, instance: InstanceRecord): Promise<InstanceHealthState> {
+    const details = await repository.loadInstanceDetails(instance.name);
+    const hasAnyCredential = Boolean(details?.tokenConfigured || details?.passwordConfigured);
+    if (!hasAnyCredential) {
+      return {
+        kind: "no-auth",
+        detail: "Token or password is not configured.",
+      };
+    }
+
+    try {
+      await repository.loadConnectionConfig(instance.name);
+    } catch (error) {
+      return {
+        kind: "error",
+        detail: String(error),
+      };
+    }
+
+    const service = this.getService();
+    if (!service) {
+      return {
+        kind: "error",
+        detail: "Grafana service is not available.",
+      };
+    }
+
+    try {
+      await service.listRemoteDatasources(instance.name);
+      return { kind: "ok" };
+    } catch (error) {
+      return {
+        kind: "error",
+        detail: String(error),
+      };
+    }
+  }
+}
+
+function instanceHealthLabel(health: InstanceHealthState): string {
+  switch (health.kind) {
+    case "ok":
+      return "connected";
+    case "no-auth":
+      return "no auth";
+    case "error":
+      return "unavailable";
   }
 }

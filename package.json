@@ -2,7 +2,7 @@
   "name": "grafana-dashboard-sync",
   "displayName": "Grafana Dashboard Sync",
   "description": "Manage Grafana dashboards from VS Code with pull, render, deploy, backup, and datasource mapping workflows.",
-  "version": "0.8.12",
+  "version": "0.8.13",
   "publisher": "vaslit",
   "license": "MIT",
   "repository": {
