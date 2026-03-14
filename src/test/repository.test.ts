@@ -259,7 +259,7 @@ test("removeDashboardFromProject deletes local dashboard and overrides when requ
   });
 });
 
-test("createTargetBackupSnapshot stores raw target backup and lists it", async () => {
+test("createBackupSnapshot stores grouped backup and lists it", async () => {
   await withTempProject(async (_rootPath, repository) => {
     const entry = {
       name: "sync-status",
@@ -295,23 +295,27 @@ test("createTargetBackupSnapshot stores raw target backup and lists it", async (
       },
     });
 
-    const backup = await repository.createTargetBackupSnapshot(
-      "prod",
-      "default",
+    const backup = await repository.createBackupSnapshot(
       "dashboard",
       [
         {
-          selectorName: "sync-status",
-          baseUid: "uid-1",
-          effectiveDashboardUid: "uid-1",
-          path: "integration/status.json",
-          folderPath: "Integration",
-          title: "Status",
-          snapshotPath: "",
-          dashboard: {
-            title: "Status",
-            uid: "uid-1",
-          },
+          instanceName: "prod",
+          targetName: "default",
+          dashboards: [
+            {
+              selectorName: "sync-status",
+              baseUid: "uid-1",
+              effectiveDashboardUid: "uid-1",
+              path: "integration/status.json",
+              folderPath: "Integration",
+              title: "Status",
+              snapshotPath: "",
+              dashboard: {
+                title: "Status",
+                uid: "uid-1",
+              },
+            },
+          ],
         },
       ],
       "20260101_000000",
@@ -320,15 +324,16 @@ test("createTargetBackupSnapshot stores raw target backup and lists it", async (
 
     assert.equal(backups.length, 1);
     assert.equal(backups[0].name, "20260101_000000");
-    assert.equal(backups[0].instanceName, "prod");
-    assert.equal(backups[0].targetName, "default");
     assert.equal(backups[0].scope, "dashboard");
+    assert.equal(backups[0].instanceCount, 1);
+    assert.equal(backups[0].targetCount, 1);
     assert.equal(backups[0].dashboardCount, 1);
     assert.ok(await repository.readTextFileIfExists(path.join(backup.rootPath, "backup_manifest.json")));
     assert.ok(
       await repository.readTextFileIfExists(
-        path.join(backup.rootPath, "dashboards", "integration", "status.json"),
+        path.join(backup.rootPath, "instances", "prod", "targets", "default", "dashboards", "integration", "status.json"),
       ),
     );
+    assert.equal(backups[0].instances[0]?.targets[0]?.dashboards[0]?.selectorName, "sync-status");
   });
 });

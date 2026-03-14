@@ -176,9 +176,9 @@ export interface PullSummary {
   dashboardResults: PullDashboardResult[];
 }
 
-export type TargetBackupScope = "dashboard" | "target";
+export type BackupScope = "dashboard" | "target" | "instance" | "multi-instance";
 
-export interface TargetBackupDashboardRecord {
+export interface BackupDashboardRecord {
   selectorName: string;
   baseUid: string;
   effectiveDashboardUid: string;
@@ -188,16 +188,30 @@ export interface TargetBackupDashboardRecord {
   snapshotPath: string;
 }
 
-export interface BackupManifest {
-  version: 1;
-  kind: "target-backup";
-  backupName: string;
-  generatedAt: string;
-  scope: TargetBackupScope;
+export interface BackupTargetRecord {
   instanceName: string;
   targetName: string;
   dashboardCount: number;
-  dashboards: TargetBackupDashboardRecord[];
+  dashboards: BackupDashboardRecord[];
+}
+
+export interface BackupInstanceRecord {
+  instanceName: string;
+  targetCount: number;
+  dashboardCount: number;
+  targets: BackupTargetRecord[];
+}
+
+export interface BackupManifest {
+  version: 2;
+  kind: "grouped-backup";
+  backupName: string;
+  generatedAt: string;
+  scope: BackupScope;
+  instanceCount: number;
+  targetCount: number;
+  dashboardCount: number;
+  instances: BackupInstanceRecord[];
   retentionLimit: number;
 }
 
@@ -206,11 +220,24 @@ export interface BackupRecord {
   rootPath: string;
   manifestPath: string;
   generatedAt: string;
-  scope: TargetBackupScope;
-  instanceName: string;
-  targetName: string;
+  scope: BackupScope;
+  instanceCount: number;
+  targetCount: number;
   dashboardCount: number;
-  dashboards: TargetBackupDashboardRecord[];
+  instances: BackupInstanceRecord[];
+}
+
+export type BackupRestoreSelection =
+  | { kind: "backup" }
+  | { kind: "instance"; instanceName: string }
+  | { kind: "target"; instanceName: string; targetName: string }
+  | { kind: "dashboard"; instanceName: string; targetName: string; selectorName: string };
+
+export interface RestoreSummary {
+  instanceCount: number;
+  targetCount: number;
+  dashboardCount: number;
+  dashboardResults: DeployDashboardResult[];
 }
 
 export type RenderScope = "dashboard" | "target";

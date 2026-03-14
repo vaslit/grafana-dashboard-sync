@@ -483,7 +483,7 @@ function logger() {
         strict_1.default.notEqual(upsertPayload?.dashboard.uid, entry.uid);
     });
 });
-(0, node_test_1.test)("restoreTargetBackup uses raw live dashboard snapshot without render", async () => {
+(0, node_test_1.test)("restoreBackup uses raw live dashboard snapshot without render", async () => {
     await withTempProject(async (repository, entry) => {
         await repository.createInstance("prod");
         await repository.saveInstanceEnvValues("prod", {
@@ -570,13 +570,82 @@ function logger() {
             upsertPayload = payload;
         });
         const service = new dashboardService_1.DashboardService(repository, logger(), async () => client);
-        const summary = await service.restoreTargetBackup(backup);
+        const summary = await service.restoreBackup(backup);
         strict_1.default.equal(summary.dashboardResults.length, 1);
+        strict_1.default.equal(summary.targetCount, 1);
         const templating = upsertPayload?.dashboard.templating;
         strict_1.default.deepEqual(templating.list[0].current, {
             text: "old",
             value: "old",
         });
+    });
+});
+(0, node_test_1.test)("restoreBackup can restore only a selected target slice", async () => {
+    await withTempProject(async (repository, entry) => {
+        await repository.createInstance("prod");
+        await repository.createDeploymentTarget("prod", "blue");
+        await repository.saveInstanceEnvValues("prod", {
+            GRAFANA_URL: "http://prod",
+            GRAFANA_NAMESPACE: "default",
+        });
+        const backup = await repository.createBackupSnapshot("instance", [
+            {
+                instanceName: "prod",
+                targetName: "default",
+                dashboards: [
+                    {
+                        selectorName: "sync-status",
+                        baseUid: entry.uid,
+                        effectiveDashboardUid: entry.uid,
+                        path: entry.path,
+                        title: "Default snapshot",
+                        snapshotPath: "",
+                        dashboard: {
+                            title: "Default snapshot",
+                            uid: entry.uid,
+                        },
+                    },
+                ],
+            },
+            {
+                instanceName: "prod",
+                targetName: "blue",
+                dashboards: [
+                    {
+                        selectorName: "sync-status",
+                        baseUid: entry.uid,
+                        effectiveDashboardUid: "uid-blue",
+                        path: entry.path,
+                        title: "Blue snapshot",
+                        snapshotPath: "",
+                        dashboard: {
+                            title: "Blue snapshot",
+                            uid: "uid-blue",
+                        },
+                    },
+                ],
+            },
+        ], "20260101_000001");
+        const upserts = [];
+        const service = new dashboardService_1.DashboardService(repository, logger(), async () => new MockGrafanaClient({
+            dashboard: {
+                title: "unused",
+                uid: entry.uid,
+            },
+            meta: {},
+        }, [], (payload) => {
+            upserts.push(payload);
+        }));
+        const summary = await service.restoreBackup(backup, {
+            kind: "target",
+            instanceName: "prod",
+            targetName: "blue",
+        });
+        strict_1.default.equal(summary.instanceCount, 1);
+        strict_1.default.equal(summary.targetCount, 1);
+        strict_1.default.equal(summary.dashboardCount, 1);
+        strict_1.default.equal(upserts.length, 1);
+        strict_1.default.equal(upserts[0]?.dashboard.title, "Blue snapshot");
     });
 });
 (0, node_test_1.test)("deployDashboards resolves canonical datasource names through the global catalog", async () => {

@@ -376,11 +376,49 @@ class DashboardService {
         }
         return items;
     }
-    async createTargetBackup(entries, instanceName, targetName, scope = backupScopeForEntries(entries)) {
-        const items = await this.rawTargetBackupItems(entries, instanceName, targetName);
-        const backup = await this.repository.createTargetBackupSnapshot(instanceName, targetName, scope, items);
-        this.log.info(`Created ${scope} backup ${backup.name} for ${instanceName}/${targetName}`);
+    mergeBackupCaptureSpecs(specs) {
+        const merged = new Map();
+        for (const spec of specs) {
+            const targetKey = `${spec.instanceName}/${spec.targetName}`;
+            const targetEntries = merged.get(targetKey) ?? new Map();
+            for (const entry of spec.entries) {
+                targetEntries.set((0, manifest_1.selectorNameForEntry)(entry), entry);
+            }
+            merged.set(targetKey, targetEntries);
+        }
+        return [...merged.entries()]
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([targetKey, targetEntries]) => {
+            const [instanceName, targetName] = targetKey.split("/", 2);
+            return {
+                instanceName,
+                targetName,
+                entries: [...targetEntries.values()],
+            };
+        });
+    }
+    async createBackup(specs, scope) {
+        const mergedSpecs = this.mergeBackupCaptureSpecs(specs).filter((spec) => spec.entries.length > 0);
+        if (mergedSpecs.length === 0) {
+            throw new Error("No dashboards available for backup.");
+        }
+        const targets = await Promise.all(mergedSpecs.map(async (spec) => ({
+            instanceName: spec.instanceName,
+            targetName: spec.targetName,
+            dashboards: await this.rawTargetBackupItems(spec.entries, spec.instanceName, spec.targetName),
+        })));
+        const backup = await this.repository.createBackupSnapshot(scope, targets);
+        this.log.info(`Created ${scope} backup ${backup.name} across ${backup.targetCount} target(s).`);
         return backup;
+    }
+    async createTargetBackup(entries, instanceName, targetName, scope = backupScopeForEntries(entries)) {
+        return this.createBackup([
+            {
+                instanceName,
+                targetName,
+                entries,
+            },
+        ], scope);
     }
     async desiredFolderPathForSnapshot(sourceRepository, entry, instanceName, targetName, snapshotFolderPath) {
         const overrideFile = await sourceRepository.readTargetOverrideFile(instanceName, targetName, entry);
@@ -442,36 +480,103 @@ class DashboardService {
         }
         return currentFolder?.uid;
     }
-    async restoreTargetBackup(backup) {
-        const client = await this.clientFactory(backup.instanceName);
-        const connection = await this.repository.loadConnectionConfig(backup.instanceName);
-        const folderCache = await client.listFolders();
+    selectedBackupTargets(backup, selection) {
+        switch (selection.kind) {
+            case "backup":
+                return backup.instances.flatMap((instance) => instance.targets.map((target) => ({
+                    instanceName: instance.instanceName,
+                    targetName: target.targetName,
+                    dashboards: target.dashboards,
+                })));
+            case "instance": {
+                const instance = backup.instances.find((candidate) => candidate.instanceName === selection.instanceName);
+                if (!instance) {
+                    throw new Error(`Backup instance not found: ${selection.instanceName}`);
+                }
+                return instance.targets.map((target) => ({
+                    instanceName: instance.instanceName,
+                    targetName: target.targetName,
+                    dashboards: target.dashboards,
+                }));
+            }
+            case "target": {
+                const instance = backup.instances.find((candidate) => candidate.instanceName === selection.instanceName);
+                const target = instance?.targets.find((candidate) => candidate.targetName === selection.targetName);
+                if (!instance || !target) {
+                    throw new Error(`Backup target not found: ${selection.instanceName}/${selection.targetName}`);
+                }
+                return [
+                    {
+                        instanceName: instance.instanceName,
+                        targetName: target.targetName,
+                        dashboards: target.dashboards,
+                    },
+                ];
+            }
+            case "dashboard": {
+                const instance = backup.instances.find((candidate) => candidate.instanceName === selection.instanceName);
+                const target = instance?.targets.find((candidate) => candidate.targetName === selection.targetName);
+                const dashboard = target?.dashboards.find((candidate) => candidate.selectorName === selection.selectorName);
+                if (!instance || !target || !dashboard) {
+                    throw new Error(`Backup dashboard not found: ${selection.instanceName}/${selection.targetName}/${selection.selectorName}`);
+                }
+                return [
+                    {
+                        instanceName: instance.instanceName,
+                        targetName: target.targetName,
+                        dashboards: [dashboard],
+                    },
+                ];
+            }
+        }
+    }
+    async restoreBackup(backup, selection = { kind: "backup" }) {
+        const selectedTargets = this.selectedBackupTargets(backup, selection);
         const dashboardResults = [];
-        for (const dashboard of backup.dashboards) {
-            const rawDashboard = await this.repository.readBackupDashboardSnapshot(backup, dashboard);
-            const folderUid = await this.ensureExplicitFolderPath(client, folderCache, dashboard.folderPath);
-            const response = await client.upsertDashboard({
-                dashboard: sanitizeDashboardForStorage(rawDashboard),
-                folderUid,
-                message: `Restore backup ${backup.name} from VS Code`,
-            });
-            dashboardResults.push({
-                entry: {
-                    name: dashboard.selectorName,
-                    uid: dashboard.baseUid,
-                    path: dashboard.path,
-                },
-                selectorName: dashboard.selectorName,
-                dashboardTitle: dashboard.title,
-                folderUid,
-                url: response.url,
-                targetBaseUrl: connection.baseUrl,
-                deploymentTargetName: backup.targetName,
-            });
+        const restoredInstances = new Set();
+        const restoredTargets = new Set();
+        const clients = new Map();
+        for (const target of selectedTargets) {
+            let runtime = clients.get(target.instanceName);
+            if (!runtime) {
+                const client = await this.clientFactory(target.instanceName);
+                const connection = await this.repository.loadConnectionConfig(target.instanceName);
+                runtime = {
+                    client,
+                    baseUrl: connection.baseUrl,
+                    folderCache: await client.listFolders(),
+                };
+                clients.set(target.instanceName, runtime);
+            }
+            restoredInstances.add(target.instanceName);
+            restoredTargets.add(`${target.instanceName}/${target.targetName}`);
+            for (const dashboard of target.dashboards) {
+                const rawDashboard = await this.repository.readBackupDashboardSnapshot(backup, dashboard);
+                const folderUid = await this.ensureExplicitFolderPath(runtime.client, runtime.folderCache, dashboard.folderPath);
+                const response = await runtime.client.upsertDashboard({
+                    dashboard: sanitizeDashboardForStorage(rawDashboard),
+                    folderUid,
+                    message: `Restore backup ${backup.name} from VS Code`,
+                });
+                dashboardResults.push({
+                    entry: {
+                        name: dashboard.selectorName,
+                        uid: dashboard.baseUid,
+                        path: dashboard.path,
+                    },
+                    selectorName: dashboard.selectorName,
+                    dashboardTitle: dashboard.title,
+                    folderUid,
+                    url: response.url,
+                    targetBaseUrl: runtime.baseUrl,
+                    deploymentTargetName: target.targetName,
+                });
+            }
         }
         return {
-            instanceName: backup.instanceName,
-            deploymentTargetName: backup.targetName,
+            instanceCount: restoredInstances.size,
+            targetCount: restoredTargets.size,
+            dashboardCount: dashboardResults.length,
             dashboardResults,
         };
     }

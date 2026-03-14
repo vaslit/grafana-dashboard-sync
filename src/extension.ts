@@ -8,6 +8,8 @@ import { selectorNameForEntry } from "./core/manifest";
 import { PROJECT_CONFIG_FILE, discoverProjectLayout } from "./core/projectLocator";
 import { DEFAULT_DEPLOYMENT_TARGET, ProjectRepository } from "./core/repository";
 import {
+  BackupRestoreSelection,
+  BackupScope,
   BackupRecord,
   DashboardManifestEntry,
   DashboardRecord,
@@ -17,7 +19,13 @@ import {
   LogSink,
 } from "./core/types";
 import { InstanceSecretStorage } from "./instanceSecretStorage";
-import { BackupTreeItem, BackupTreeProvider } from "./ui/backupTreeProvider";
+import {
+  BackupDashboardTreeItem,
+  BackupInstanceTreeItem,
+  BackupTargetTreeItem,
+  BackupTreeItem,
+  BackupTreeProvider,
+} from "./ui/backupTreeProvider";
 import {
   DashboardInstanceTreeItem,
   DashboardTargetTreeItem,
@@ -55,6 +63,12 @@ function toRemoteDashboardPick(dashboard: GrafanaDashboardSummary): vscode.Quick
     detail: `UID: ${dashboard.uid}${dashboard.url ? ` | ${dashboard.url}` : ""}`,
     dashboard,
   };
+}
+
+interface BackupTargetSpec {
+  instanceName: string;
+  targetName: string;
+  entries: DashboardManifestEntry[];
 }
 
 function datasourceSelectionsFromFormValues(
@@ -340,37 +354,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         `Initialized Grafana project in ${path.relative(workspaceRoot, nextRepository.projectRootPath) || "."}.`,
       );
     },
-    createBackup: async () => {
-      const service = requireService();
-      const repository = requireRepository();
-      const target = await pickRequiredDeploymentTarget();
-      const entries = (await repository.listDashboardRecords()).map((record) => record.entry);
-      if (entries.length === 0) {
-        throw new Error("No managed dashboards available for backup.");
-      }
-      const backup = await service.createTargetBackup(entries, target.instanceName, target.name, "target");
-      selectionState.setBackup(backup.rootPath);
-      await refreshAll();
-      void vscode.window.showInformationMessage(`Created target backup ${backup.name} for ${target.instanceName}/${target.name}.`);
-    },
-    createDashboardBackup: async () => {
-      const service = requireService();
-      const target = await pickRequiredDeploymentTarget();
-      const record = await requireDashboardRecord(selectionState.selectedDashboardSelectorName);
-      const backup = await service.createTargetBackup([record.entry], target.instanceName, target.name, "dashboard");
-      selectionState.setBackup(backup.rootPath);
-      await refreshAll();
-      void vscode.window.showInformationMessage(`Created dashboard backup ${backup.name} for ${record.selectorName} on ${target.instanceName}/${target.name}.`);
-    },
-    restoreBackup: async () => {
-      const service = requireService();
-      const backup = await requireBackup();
-      const summary = await service.restoreTargetBackup(backup);
-      await refreshAll();
-      void vscode.window.showInformationMessage(
-        `Backup restore complete: ${summary.dashboardResults.length} dashboard(s) restored to ${backup.instanceName}/${backup.targetName} from ${backup.name}.`,
-      );
-    },
     renderSelected: async (selectorName?: string) => {
       const service = requireService();
       const target = await pickRequiredDeploymentTarget();
@@ -440,27 +423,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const repository = requireRepository();
       const target = await pickRequiredDeploymentTarget(instanceName, targetName);
       await vscode.env.openExternal(vscode.Uri.file(repository.renderRootPath(target.instanceName, target.name)));
-    },
-    openBackupFolder: async () => {
-      const backup = await requireBackup();
-      await vscode.env.openExternal(vscode.Uri.file(backup.rootPath));
-    },
-    deleteBackup: async () => {
-      const repository = requireRepository();
-      const backup = await requireBackup();
-      const confirmed = await vscode.window.showWarningMessage(
-        `Delete backup ${backup.name}?`,
-        { modal: true },
-        "Delete",
-      );
-      if (confirmed !== "Delete") {
-        return;
-      }
-
-      await repository.deleteBackup(backup.instanceName, backup.targetName, backup.name);
-      selectionState.setBackup(undefined);
-      await refreshAll();
-      void vscode.window.showInformationMessage(`Deleted backup ${backup.name}.`);
     },
     createManifestFromExample: async () => {
       const repository = requireRepository();
@@ -970,7 +932,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const backupSelectionDisposable = backupTreeView.onDidChangeSelection((event) => {
     const item = event.selection[0];
-    if (item instanceof BackupTreeItem) {
+    if (
+      item instanceof BackupTreeItem ||
+      item instanceof BackupInstanceTreeItem ||
+      item instanceof BackupTargetTreeItem ||
+      item instanceof BackupDashboardTreeItem
+    ) {
       selectionState.setBackup(item.backup.rootPath);
       void detailsProvider.refresh();
     }
@@ -1002,9 +969,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     selectionStateDisposable,
     vscode.window.registerWebviewViewProvider("grafanaDashboards.details", detailsProvider),
     vscode.commands.registerCommand("grafanaDashboards.initializeProject", () => actionHandlers.initializeProject()),
-    vscode.commands.registerCommand("grafanaDashboards.createBackup", () => actionHandlers.createBackup()),
-    vscode.commands.registerCommand("grafanaDashboards.createDashboardBackup", (item?: DashboardTreeItem) => createDashboardBackup(item)),
-    vscode.commands.registerCommand("grafanaDashboards.deployBackup", (item?: BackupTreeItem) => restoreBackup(item)),
+    vscode.commands.registerCommand(
+      "grafanaDashboards.createBackup",
+      (
+        item?:
+          | DashboardTreeItem
+          | DashboardInstanceTreeItem
+          | DashboardTargetTreeItem
+          | InstanceTreeItem
+          | DeploymentTargetTreeItem
+          | InstanceTargetDashboardTreeItem,
+      ) => createBackupCommand(item),
+    ),
+    vscode.commands.registerCommand("grafanaDashboards.createAllDashboardsBackup", () => createAllDashboardsBackupCommand()),
+    vscode.commands.registerCommand(
+      "grafanaDashboards.restoreBackup",
+      (item?: BackupTreeItem | BackupInstanceTreeItem | BackupTargetTreeItem | BackupDashboardTreeItem) =>
+        restoreBackupCommand(item),
+    ),
     vscode.commands.registerCommand("grafanaDashboards.openBackupFolder", (item?: BackupTreeItem) =>
       openBackupFolder(item),
     ),
@@ -1071,6 +1053,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand("grafanaDashboards.renderAllInstances", () =>
       renderAllInstancesCommand(),
+    ),
+    vscode.commands.registerCommand("grafanaDashboards.deployAllDashboards", () =>
+      deployAllDashboardsCommand(),
     ),
     vscode.commands.registerCommand("grafanaDashboards.openRenderFolder", (item?: InstanceTreeItem | DeploymentTargetTreeItem) =>
       openRenderFolder(item),
@@ -1306,6 +1291,146 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     return selection.target;
+  }
+
+  function isBackupScopeItem(
+    item: unknown,
+  ): item is
+    | DashboardTreeItem
+    | DashboardInstanceTreeItem
+    | DashboardTargetTreeItem
+    | InstanceTreeItem
+    | DeploymentTargetTreeItem
+    | InstanceTargetDashboardTreeItem {
+    return (
+      isDashboardScopeItem(item) ||
+      isInstanceTargetDashboardItem(item) ||
+      item instanceof InstanceTreeItem ||
+      item instanceof DeploymentTargetTreeItem
+    );
+  }
+
+  async function backupSpecsForItem(
+    item:
+      | DashboardTreeItem
+      | DashboardInstanceTreeItem
+      | DashboardTargetTreeItem
+      | InstanceTreeItem
+      | DeploymentTargetTreeItem
+      | InstanceTargetDashboardTreeItem,
+  ): Promise<{
+    scope: BackupScope;
+    specs: BackupTargetSpec[];
+    label: string;
+  }> {
+    const repository = requireRepository();
+
+    if (item instanceof DashboardTreeItem) {
+      const targets = await repository.listAllDeploymentTargets();
+      return {
+        scope: "multi-instance",
+        specs: targets.map((target) => ({
+          instanceName: target.instanceName,
+          targetName: target.name,
+          entries: [item.record.entry],
+        })),
+        label: `${item.record.selectorName} across all instances`,
+      };
+    }
+
+    if (item instanceof DashboardInstanceTreeItem) {
+      const targets = await repository.listDeploymentTargets(item.instance.name);
+      return {
+        scope: "instance",
+        specs: targets.map((target) => ({
+          instanceName: target.instanceName,
+          targetName: target.name,
+          entries: [item.record.entry],
+        })),
+        label: `${item.record.selectorName} in ${item.instance.name}`,
+      };
+    }
+
+    if (item instanceof DashboardTargetTreeItem) {
+      return {
+        scope: "dashboard",
+        specs: [
+          {
+            instanceName: item.target.instanceName,
+            targetName: item.target.name,
+            entries: [item.record.entry],
+          },
+        ],
+        label: `${item.record.selectorName} on ${item.target.instanceName}/${item.target.name}`,
+      };
+    }
+
+    if (item instanceof InstanceTreeItem) {
+      const entries = await allDashboardEntries();
+      const targets = await repository.listDeploymentTargets(item.instance.name);
+      return {
+        scope: "instance",
+        specs: targets.map((target) => ({
+          instanceName: target.instanceName,
+          targetName: target.name,
+          entries,
+        })),
+        label: `all dashboards in ${item.instance.name}`,
+      };
+    }
+
+    if (item instanceof DeploymentTargetTreeItem) {
+      return {
+        scope: "target",
+        specs: [
+          {
+            instanceName: item.target.instanceName,
+            targetName: item.target.name,
+            entries: await allDashboardEntries(),
+          },
+        ],
+        label: `all dashboards on ${item.target.instanceName}/${item.target.name}`,
+      };
+    }
+
+    return {
+      scope: "dashboard",
+      specs: [
+        {
+          instanceName: item.target.instanceName,
+          targetName: item.target.name,
+          entries: [item.record.entry],
+        },
+      ],
+      label: `${item.record.selectorName} on ${item.target.instanceName}/${item.target.name}`,
+    };
+  }
+
+  function backupRestoreSelectionForItem(
+    item?: BackupTreeItem | BackupInstanceTreeItem | BackupTargetTreeItem | BackupDashboardTreeItem,
+  ): BackupRestoreSelection {
+    if (!item || item instanceof BackupTreeItem) {
+      return { kind: "backup" };
+    }
+    if (item instanceof BackupInstanceTreeItem) {
+      return {
+        kind: "instance",
+        instanceName: item.instance.instanceName,
+      };
+    }
+    if (item instanceof BackupTargetTreeItem) {
+      return {
+        kind: "target",
+        instanceName: item.target.instanceName,
+        targetName: item.target.targetName,
+      };
+    }
+    return {
+      kind: "dashboard",
+      instanceName: item.instanceName,
+      targetName: item.targetName,
+      selectorName: item.dashboard.selectorName,
+    };
   }
 
   async function pickInstanceIfNeeded(explicitInstanceName?: string): Promise<InstanceRecord | undefined> {
@@ -1648,11 +1773,55 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
   }
 
-  async function createDashboardBackup(item?: DashboardTreeItem): Promise<void> {
-    if (item) {
-      selectionState.setDashboard(item.record.selectorName);
+  async function createAllDashboardsBackupCommand(): Promise<void> {
+    const service = requireService();
+    const repository = requireRepository();
+    const entries = (await repository.listDashboardRecords()).map((record) => record.entry);
+    if (entries.length === 0) {
+      throw new Error("No managed dashboards available for backup.");
     }
-    await actionHandlers.createDashboardBackup();
+    const targets = await repository.listAllDeploymentTargets();
+    if (targets.length === 0) {
+      throw new Error("No deployment targets available.");
+    }
+    const backup = await service.createBackup(
+      targets.map((target) => ({
+        instanceName: target.instanceName,
+        targetName: target.name,
+        entries,
+      })),
+      "multi-instance",
+    );
+    selectionState.setBackup(backup.rootPath);
+    await refreshAll();
+    void vscode.window.showInformationMessage(
+      `Created backup ${backup.name} for all dashboards across ${backup.instanceCount} instance(s) and ${backup.targetCount} target(s).`,
+    );
+  }
+
+  async function createBackupCommand(
+    item?:
+      | DashboardTreeItem
+      | DashboardInstanceTreeItem
+      | DashboardTargetTreeItem
+      | InstanceTreeItem
+      | DeploymentTargetTreeItem
+      | InstanceTargetDashboardTreeItem,
+  ): Promise<void> {
+    const service = requireService();
+
+    if (item && isBackupScopeItem(item)) {
+      const { scope, specs, label } = await backupSpecsForItem(item);
+      const backup = await service.createBackup(specs, scope);
+      selectionState.setBackup(backup.rootPath);
+      await refreshAll();
+      void vscode.window.showInformationMessage(
+        `Created ${scope} backup ${backup.name} for ${label}.`,
+      );
+      return;
+    }
+
+    await createAllDashboardsBackupCommand();
   }
 
   async function setInstanceToken(item?: InstanceTreeItem): Promise<void> {
@@ -1685,25 +1854,64 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await actionHandlers.removeDeploymentTarget();
   }
 
-  async function restoreBackup(item?: BackupTreeItem): Promise<void> {
-    if (item) {
-      selectionState.setBackup(item.backup.rootPath);
-    }
-    await actionHandlers.restoreBackup();
+  async function restoreBackupCommand(
+    item?: BackupTreeItem | BackupInstanceTreeItem | BackupTargetTreeItem | BackupDashboardTreeItem,
+  ): Promise<void> {
+    const service = requireService();
+    const backup = item?.backup ?? (await requireBackup());
+    const selection = backupRestoreSelectionForItem(item);
+    selectionState.setBackup(backup.rootPath);
+    const summary = await service.restoreBackup(backup, selection);
+    await refreshAll();
+    void vscode.window.showInformationMessage(
+      `Backup restore complete: ${summary.dashboardCount} dashboard(s) restored across ${summary.targetCount} target(s).`,
+    );
   }
 
   async function openBackupFolder(item?: BackupTreeItem): Promise<void> {
-    if (item) {
-      selectionState.setBackup(item.backup.rootPath);
-    }
-    await actionHandlers.openBackupFolder();
+    const backup = item?.backup ?? (await requireBackup());
+    selectionState.setBackup(backup.rootPath);
+    await vscode.env.openExternal(vscode.Uri.file(backup.rootPath));
   }
 
   async function deleteBackup(item?: BackupTreeItem): Promise<void> {
-    if (item) {
-      selectionState.setBackup(item.backup.rootPath);
+    const repository = requireRepository();
+    const backup = item?.backup ?? (await requireBackup());
+    selectionState.setBackup(backup.rootPath);
+    const confirmed = await vscode.window.showWarningMessage(
+      `Delete backup ${backup.name}?`,
+      { modal: true },
+      "Delete",
+    );
+    if (confirmed !== "Delete") {
+      return;
     }
-    await actionHandlers.deleteBackup();
+
+    await repository.deleteBackup(backup.name);
+    selectionState.setBackup(undefined);
+    await refreshAll();
+    void vscode.window.showInformationMessage(`Deleted backup ${backup.name}.`);
+  }
+
+  async function deployAllDashboardsCommand(): Promise<void> {
+    const service = requireService();
+    const repository = requireRepository();
+    const entries = await allDashboardEntries();
+    const targets = await repository.listAllDeploymentTargets();
+    if (targets.length === 0) {
+      throw new Error("No deployment targets available.");
+    }
+
+    let deployedCount = 0;
+    for (const target of targets) {
+      const summary = await service.deployDashboards(entries, target.instanceName, target.name);
+      deployedCount += summary.dashboardResults.length;
+    }
+
+    await refreshAll();
+    void vscode.window.showInformationMessage(
+      `Deploy complete for all dashboards: ${deployedCount} deployment(s) across ${targets.length} target(s).`,
+    );
   }
 
   await refreshAll();

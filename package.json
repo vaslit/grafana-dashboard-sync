@@ -45,15 +45,15 @@
     "onCommand:grafanaDashboards.setInstanceToken",
     "onCommand:grafanaDashboards.clearInstanceToken",
     "onCommand:grafanaDashboards.createBackup",
-    "onCommand:grafanaDashboards.createDashboardBackup",
-    "onCommand:grafanaDashboards.deployBackup",
+    "onCommand:grafanaDashboards.createAllDashboardsBackup",
+    "onCommand:grafanaDashboards.restoreBackup",
+    "onCommand:grafanaDashboards.deployAllDashboards",
     "onCommand:grafanaDashboards.renderDashboard",
     "onCommand:grafanaDashboards.renderTarget",
     "onCommand:grafanaDashboards.renderInstance",
     "onCommand:grafanaDashboards.renderAllInstances",
     "onCommand:grafanaDashboards.openRenderFolder",
-    "onCommand:grafanaDashboards.removeInstance",
-    "onCommand:grafanaDashboards.pullAllDashboards"
+    "onCommand:grafanaDashboards.removeInstance"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -110,15 +110,19 @@
       },
       {
         "command": "grafanaDashboards.createBackup",
-        "title": "Create Target Backup"
+        "title": "Create Backup"
       },
       {
-        "command": "grafanaDashboards.createDashboardBackup",
-        "title": "Create Dashboard Backup"
+        "command": "grafanaDashboards.createAllDashboardsBackup",
+        "title": "Create Backup of All Dashboards"
       },
       {
-        "command": "grafanaDashboards.deployBackup",
+        "command": "grafanaDashboards.restoreBackup",
         "title": "Restore Backup"
+      },
+      {
+        "command": "grafanaDashboards.deployAllDashboards",
+        "title": "Deploy All Dashboards"
       },
       {
         "command": "grafanaDashboards.renderDashboard",
@@ -163,10 +167,6 @@
           "light": "media/pull-light.svg",
           "dark": "media/pull-dark.svg"
         }
-      },
-      {
-        "command": "grafanaDashboards.pullAllDashboards",
-        "title": "Pull All Managed Dashboards"
       },
       {
         "command": "grafanaDashboards.deployDashboard",
@@ -236,44 +236,19 @@
           "group": "manage@1"
         },
         {
-          "command": "grafanaDashboards.pullDashboard",
+          "command": "grafanaDashboards.createAllDashboardsBackup",
           "when": "view == grafanaDashboards.dashboards",
           "group": "sync@1"
         },
         {
-          "command": "grafanaDashboards.pullAllDashboards",
+          "command": "grafanaDashboards.deployAllDashboards",
           "when": "view == grafanaDashboards.dashboards",
           "group": "sync@2"
-        },
-        {
-          "command": "grafanaDashboards.deployDashboard",
-          "when": "view == grafanaDashboards.dashboards",
-          "group": "sync@3"
-        },
-        {
-          "command": "grafanaDashboards.renderDashboard",
-          "when": "view == grafanaDashboards.dashboards",
-          "group": "sync@4"
-        },
-        {
-          "command": "grafanaDashboards.createDashboardBackup",
-          "when": "view == grafanaDashboards.dashboards",
-          "group": "sync@5"
         },
         {
           "command": "grafanaDashboards.selectActiveInstance",
           "when": "view == grafanaDashboards.instances",
           "group": "manage@1"
-        },
-        {
-          "command": "grafanaDashboards.createBackup",
-          "when": "view == grafanaDashboards.backups",
-          "group": "manage@1"
-        },
-        {
-          "command": "grafanaDashboards.createDashboardBackup",
-          "when": "view == grafanaDashboards.backups",
-          "group": "manage@2"
         },
         {
           "command": "grafanaDashboards.createInstance",
@@ -289,6 +264,16 @@
           "command": "grafanaDashboards.renderAllInstances",
           "when": "view == grafanaDashboards.instances",
           "group": "manage@4"
+        },
+        {
+          "command": "grafanaDashboards.createAllDashboardsBackup",
+          "when": "view == grafanaDashboards.instances",
+          "group": "manage@5"
+        },
+        {
+          "command": "grafanaDashboards.deployAllDashboards",
+          "when": "view == grafanaDashboards.instances",
+          "group": "manage@6"
         }
       ],
       "view/item/context": [
@@ -303,6 +288,11 @@
           "group": "inline@2"
         },
         {
+          "command": "grafanaDashboards.createBackup",
+          "when": "view == grafanaDashboards.dashboards && (viewItem == grafanaDashboard || viewItem == grafanaDashboardInstance || viewItem == grafanaDashboardTarget)",
+          "group": "inline@3"
+        },
+        {
           "command": "grafanaDashboards.pullDashboard",
           "when": "view == grafanaDashboards.instances && (viewItem == grafanaInstance || viewItem == grafanaDeploymentTarget || viewItem == grafanaInstanceDashboard)",
           "group": "inline@1"
@@ -311,6 +301,11 @@
           "command": "grafanaDashboards.deployDashboard",
           "when": "view == grafanaDashboards.instances && (viewItem == grafanaInstance || viewItem == grafanaDeploymentTarget || viewItem == grafanaInstanceDashboard)",
           "group": "inline@2"
+        },
+        {
+          "command": "grafanaDashboards.createBackup",
+          "when": "view == grafanaDashboards.instances && (viewItem == grafanaInstance || viewItem == grafanaDeploymentTarget || viewItem == grafanaInstanceDashboard)",
+          "group": "inline@3"
         },
         {
           "command": "grafanaDashboards.openDashboardJson",
@@ -338,7 +333,7 @@
           "group": "navigation@4"
         },
         {
-          "command": "grafanaDashboards.createDashboardBackup",
+          "command": "grafanaDashboards.createBackup",
           "when": "view == grafanaDashboards.dashboards && viewItem == grafanaDashboard",
           "group": "navigation@5"
         },
@@ -356,6 +351,11 @@
           "command": "grafanaDashboards.renderDashboard",
           "when": "view == grafanaDashboards.dashboards && (viewItem == grafanaDashboardInstance || viewItem == grafanaDashboardTarget)",
           "group": "navigation@3"
+        },
+        {
+          "command": "grafanaDashboards.createBackup",
+          "when": "view == grafanaDashboards.dashboards && (viewItem == grafanaDashboardInstance || viewItem == grafanaDashboardTarget)",
+          "group": "navigation@4"
         },
         {
           "command": "grafanaDashboards.removeDashboard",
@@ -381,6 +381,11 @@
           "command": "grafanaDashboards.renderInstance",
           "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
           "group": "navigation@7"
+        },
+        {
+          "command": "grafanaDashboards.createBackup",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
+          "group": "navigation@7.5"
         },
         {
           "command": "grafanaDashboards.clearInstanceToken",
@@ -413,6 +418,11 @@
           "group": "navigation@3"
         },
         {
+          "command": "grafanaDashboards.createBackup",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstanceDashboard",
+          "group": "navigation@4"
+        },
+        {
           "command": "grafanaDashboards.pullDashboard",
           "when": "view == grafanaDashboards.instances && viewItem == grafanaDeploymentTarget",
           "group": "navigation@8.5"
@@ -428,14 +438,14 @@
           "group": "navigation@9.25"
         },
         {
+          "command": "grafanaDashboards.createBackup",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaDeploymentTarget",
+          "group": "navigation@9.35"
+        },
+        {
           "command": "grafanaDashboards.openRenderFolder",
           "when": "view == grafanaDashboards.instances && viewItem == grafanaDeploymentTarget",
           "group": "navigation@9.5"
-        },
-        {
-          "command": "grafanaDashboards.openOverrideFile",
-          "when": "view == grafanaDashboards.instances && viewItem == grafanaDeploymentTarget",
-          "group": "navigation@10"
         },
         {
           "command": "grafanaDashboards.removeDeploymentTarget",
@@ -443,8 +453,23 @@
           "group": "navigation@11"
         },
         {
-          "command": "grafanaDashboards.deployBackup",
+          "command": "grafanaDashboards.restoreBackup",
           "when": "view == grafanaDashboards.backups && viewItem == grafanaBackup",
+          "group": "navigation"
+        },
+        {
+          "command": "grafanaDashboards.restoreBackup",
+          "when": "view == grafanaDashboards.backups && viewItem == grafanaBackupInstance",
+          "group": "navigation"
+        },
+        {
+          "command": "grafanaDashboards.restoreBackup",
+          "when": "view == grafanaDashboards.backups && viewItem == grafanaBackupTarget",
+          "group": "navigation"
+        },
+        {
+          "command": "grafanaDashboards.restoreBackup",
+          "when": "view == grafanaDashboards.backups && viewItem == grafanaBackupDashboard",
           "group": "navigation"
         },
         {

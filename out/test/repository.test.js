@@ -220,7 +220,7 @@ async function withTempProject(run) {
         });
     });
 });
-(0, node_test_1.test)("createTargetBackupSnapshot stores raw target backup and lists it", async () => {
+(0, node_test_1.test)("createBackupSnapshot stores grouped backup and lists it", async () => {
     await withTempProject(async (_rootPath, repository) => {
         const entry = {
             name: "sync-status",
@@ -254,30 +254,37 @@ async function withTempProject(run) {
                 site: "nsk",
             },
         });
-        const backup = await repository.createTargetBackupSnapshot("prod", "default", "dashboard", [
+        const backup = await repository.createBackupSnapshot("dashboard", [
             {
-                selectorName: "sync-status",
-                baseUid: "uid-1",
-                effectiveDashboardUid: "uid-1",
-                path: "integration/status.json",
-                folderPath: "Integration",
-                title: "Status",
-                snapshotPath: "",
-                dashboard: {
-                    title: "Status",
-                    uid: "uid-1",
-                },
+                instanceName: "prod",
+                targetName: "default",
+                dashboards: [
+                    {
+                        selectorName: "sync-status",
+                        baseUid: "uid-1",
+                        effectiveDashboardUid: "uid-1",
+                        path: "integration/status.json",
+                        folderPath: "Integration",
+                        title: "Status",
+                        snapshotPath: "",
+                        dashboard: {
+                            title: "Status",
+                            uid: "uid-1",
+                        },
+                    },
+                ],
             },
         ], "20260101_000000");
         const backups = await repository.listBackups();
         strict_1.default.equal(backups.length, 1);
         strict_1.default.equal(backups[0].name, "20260101_000000");
-        strict_1.default.equal(backups[0].instanceName, "prod");
-        strict_1.default.equal(backups[0].targetName, "default");
         strict_1.default.equal(backups[0].scope, "dashboard");
+        strict_1.default.equal(backups[0].instanceCount, 1);
+        strict_1.default.equal(backups[0].targetCount, 1);
         strict_1.default.equal(backups[0].dashboardCount, 1);
         strict_1.default.ok(await repository.readTextFileIfExists(node_path_1.default.join(backup.rootPath, "backup_manifest.json")));
-        strict_1.default.ok(await repository.readTextFileIfExists(node_path_1.default.join(backup.rootPath, "dashboards", "integration", "status.json")));
+        strict_1.default.ok(await repository.readTextFileIfExists(node_path_1.default.join(backup.rootPath, "instances", "prod", "targets", "default", "dashboards", "integration", "status.json")));
+        strict_1.default.equal(backups[0].instances[0]?.targets[0]?.dashboards[0]?.selectorName, "sync-status");
     });
 });
 //# sourceMappingURL=repository.test.js.map

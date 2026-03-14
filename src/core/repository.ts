@@ -6,8 +6,12 @@ import { stableJsonStringify } from "./json";
 import { findManifestEntryBySelector, selectorNameForEntry, validateManifest } from "./manifest";
 import { PROJECT_CONFIG_FILE, ProjectLayout, defaultProjectLayout } from "./projectLocator";
 import {
+  BackupDashboardRecord,
   BackupManifest,
   BackupRecord,
+  BackupInstanceRecord,
+  BackupScope,
+  BackupTargetRecord,
   DashboardDetailsModel,
   DashboardManifest,
   DashboardManifestEntry,
@@ -27,8 +31,6 @@ import {
   RenderManifest,
   RenderManifestDashboardRecord,
   RenderScope,
-  TargetBackupDashboardRecord,
-  TargetBackupScope,
   WorkspaceInstanceConfig,
   WorkspaceProjectConfig,
 } from "./types";
@@ -351,35 +353,70 @@ function validateDashboardVersionIndex(
   return index;
 }
 
-function validateTargetBackupManifest(manifest: BackupManifest, filePath: string): BackupManifest {
+function validateBackupManifest(manifest: BackupManifest, filePath: string): BackupManifest {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw new Error(`Invalid backup manifest: ${filePath}`);
   }
-  if (manifest.version !== 1 || manifest.kind !== "target-backup") {
+  if (manifest.version !== 2 || manifest.kind !== "grouped-backup") {
     throw new Error(`Invalid backup manifest: ${filePath}`);
   }
-  if (manifest.scope !== "dashboard" && manifest.scope !== "target") {
+  if (!["dashboard", "target", "instance", "multi-instance"].includes(manifest.scope)) {
     throw new Error(`Invalid backup manifest: ${filePath}`);
   }
-  for (const key of ["backupName", "generatedAt", "instanceName", "targetName"] as const) {
+  for (const key of ["backupName", "generatedAt"] as const) {
     if (typeof manifest[key] !== "string" || !manifest[key].trim()) {
       throw new Error(`Invalid backup manifest: ${filePath}`);
     }
   }
-  if (!Number.isInteger(manifest.dashboardCount) || manifest.dashboardCount < 0) {
+  for (const key of ["instanceCount", "targetCount", "dashboardCount", "retentionLimit"] as const) {
+    if (!Number.isInteger(manifest[key]) || manifest[key] < 0) {
+      throw new Error(`Invalid backup manifest: ${filePath}`);
+    }
+  }
+  if (!Array.isArray(manifest.instances)) {
     throw new Error(`Invalid backup manifest: ${filePath}`);
   }
-  if (!Array.isArray(manifest.dashboards)) {
-    throw new Error(`Invalid backup manifest: ${filePath}`);
-  }
-  for (const dashboard of manifest.dashboards) {
-    for (const key of ["selectorName", "baseUid", "effectiveDashboardUid", "path", "title", "snapshotPath"] as const) {
-      if (typeof dashboard[key] !== "string" || !dashboard[key].trim()) {
+  for (const instance of manifest.instances) {
+    if (!instance || typeof instance !== "object" || Array.isArray(instance)) {
+      throw new Error(`Invalid backup manifest: ${filePath}`);
+    }
+    if (typeof instance.instanceName !== "string" || !instance.instanceName.trim()) {
+      throw new Error(`Invalid backup manifest: ${filePath}`);
+    }
+    if (!Number.isInteger(instance.targetCount) || instance.targetCount < 0) {
+      throw new Error(`Invalid backup manifest: ${filePath}`);
+    }
+    if (!Number.isInteger(instance.dashboardCount) || instance.dashboardCount < 0) {
+      throw new Error(`Invalid backup manifest: ${filePath}`);
+    }
+    if (!Array.isArray(instance.targets)) {
+      throw new Error(`Invalid backup manifest: ${filePath}`);
+    }
+    for (const target of instance.targets) {
+      if (!target || typeof target !== "object" || Array.isArray(target)) {
         throw new Error(`Invalid backup manifest: ${filePath}`);
       }
-    }
-    if (dashboard.folderPath !== undefined && (typeof dashboard.folderPath !== "string" || !dashboard.folderPath.trim())) {
-      throw new Error(`Invalid backup manifest: ${filePath}`);
+      for (const key of ["instanceName", "targetName"] as const) {
+        if (typeof target[key] !== "string" || !target[key].trim()) {
+          throw new Error(`Invalid backup manifest: ${filePath}`);
+        }
+      }
+      if (!Number.isInteger(target.dashboardCount) || target.dashboardCount < 0) {
+        throw new Error(`Invalid backup manifest: ${filePath}`);
+      }
+      if (!Array.isArray(target.dashboards)) {
+        throw new Error(`Invalid backup manifest: ${filePath}`);
+      }
+      for (const dashboard of target.dashboards) {
+        for (const key of ["selectorName", "baseUid", "effectiveDashboardUid", "path", "title", "snapshotPath"] as const) {
+          if (typeof dashboard[key] !== "string" || !dashboard[key].trim()) {
+            throw new Error(`Invalid backup manifest: ${filePath}`);
+          }
+        }
+        if (dashboard.folderPath !== undefined && (typeof dashboard.folderPath !== "string" || !dashboard.folderPath.trim())) {
+          throw new Error(`Invalid backup manifest: ${filePath}`);
+        }
+      }
     }
   }
   return manifest;
@@ -854,153 +891,149 @@ export class ProjectRepository {
     };
   }
 
-  backupTargetsRootPath(): string {
-    return path.join(this.backupsDir, "targets");
+  backupRootPath(backupName: string): string {
+    return path.join(this.backupsDir, backupName);
   }
 
-  backupRootPath(instanceName: string, targetName: string, backupName: string): string {
-    return path.join(this.backupTargetsRootPath(), instanceName, targetName, backupName);
-  }
-
-  backupManifestPath(instanceName: string, targetName: string, backupName: string): string {
-    return path.join(this.backupRootPath(instanceName, targetName, backupName), "backup_manifest.json");
+  backupManifestPath(backupName: string): string {
+    return path.join(this.backupRootPath(backupName), "backup_manifest.json");
   }
 
   backupSnapshotPath(
+    backupName: string,
     instanceName: string,
     targetName: string,
-    backupName: string,
     dashboardPath: string,
   ): string {
-    return path.join(this.backupRootPath(instanceName, targetName, backupName), "dashboards", dashboardPath);
+    return path.join(this.backupRootPath(backupName), "instances", instanceName, "targets", targetName, "dashboards", dashboardPath);
   }
 
-  async createTargetBackupSnapshot(
-    instanceName: string,
-    targetName: string,
-    scope: TargetBackupScope,
-    dashboards: Array<TargetBackupDashboardRecord & { dashboard: Record<string, unknown> }>,
+  async createBackupSnapshot(
+    scope: BackupScope,
+    targets: Array<{
+      instanceName: string;
+      targetName: string;
+      dashboards: Array<BackupDashboardRecord & { dashboard: Record<string, unknown> }>;
+    }>,
     backupName = ProjectRepository.timestamp(),
   ): Promise<BackupRecord> {
     await this.ensureProjectLayout();
-    const backupRoot = this.backupRootPath(instanceName, targetName, backupName);
+    const backupRoot = this.backupRootPath(backupName);
     await ensureDir(backupRoot);
-    const manifestDashboards: TargetBackupDashboardRecord[] = [];
-    for (const dashboard of dashboards) {
-      const snapshotPath = this.backupSnapshotPath(instanceName, targetName, backupName, dashboard.path);
-      await this.writeJsonFile(snapshotPath, dashboard.dashboard);
-      manifestDashboards.push({
-        selectorName: dashboard.selectorName,
-        baseUid: dashboard.baseUid,
-        effectiveDashboardUid: dashboard.effectiveDashboardUid,
-        path: dashboard.path,
-        ...(dashboard.folderPath ? { folderPath: dashboard.folderPath } : {}),
-        title: dashboard.title,
-        snapshotPath: path.relative(backupRoot, snapshotPath).replace(/\\/g, "/"),
+
+    const targetRecords: BackupTargetRecord[] = [];
+    for (const target of targets) {
+      const dashboards: BackupDashboardRecord[] = [];
+      for (const dashboard of target.dashboards) {
+        const snapshotPath = this.backupSnapshotPath(backupName, target.instanceName, target.targetName, dashboard.path);
+        await this.writeJsonFile(snapshotPath, dashboard.dashboard);
+        dashboards.push({
+          selectorName: dashboard.selectorName,
+          baseUid: dashboard.baseUid,
+          effectiveDashboardUid: dashboard.effectiveDashboardUid,
+          path: dashboard.path,
+          ...(dashboard.folderPath ? { folderPath: dashboard.folderPath } : {}),
+          title: dashboard.title,
+          snapshotPath: path.relative(backupRoot, snapshotPath).replace(/\\/g, "/"),
+        });
+      }
+      targetRecords.push({
+        instanceName: target.instanceName,
+        targetName: target.targetName,
+        dashboardCount: dashboards.length,
+        dashboards,
       });
     }
 
+    const groupedInstances = new Map<string, BackupTargetRecord[]>();
+    for (const target of targetRecords) {
+      const current = groupedInstances.get(target.instanceName) ?? [];
+      current.push(target);
+      groupedInstances.set(target.instanceName, current);
+    }
+
+    const instances: BackupInstanceRecord[] = [...groupedInstances.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([instanceName, instanceTargets]) => ({
+        instanceName,
+        targetCount: instanceTargets.length,
+        dashboardCount: instanceTargets.reduce((sum, target) => sum + target.dashboardCount, 0),
+        targets: instanceTargets.sort((left, right) => left.targetName.localeCompare(right.targetName)),
+      }));
+
     const backupManifest: BackupManifest = {
-      version: 1,
-      kind: "target-backup",
+      version: 2,
+      kind: "grouped-backup",
       backupName,
       generatedAt: new Date().toISOString(),
       scope,
-      instanceName,
-      targetName,
-      dashboardCount: manifestDashboards.length,
-      dashboards: manifestDashboards,
+      instanceCount: instances.length,
+      targetCount: targetRecords.length,
+      dashboardCount: targetRecords.reduce((sum, target) => sum + target.dashboardCount, 0),
+      instances,
       retentionLimit: this.maxBackups,
     };
 
-    await this.writeJsonFile(this.backupManifestPath(instanceName, targetName, backupName), backupManifest);
+    await this.writeJsonFile(this.backupManifestPath(backupName), backupManifest);
     await this.pruneManagedBackups();
-    return this.readBackupRecord(instanceName, targetName, backupName);
+    return this.readBackupRecord(backupName);
   }
 
   async listBackups(): Promise<BackupRecord[]> {
-    const targetsRoot = this.backupTargetsRootPath();
-    if (!(await exists(targetsRoot))) {
+    if (!(await exists(this.backupsDir))) {
       return [];
     }
 
-    const instanceEntries = await fs.readdir(targetsRoot, { withFileTypes: true });
+    const entries = await fs.readdir(this.backupsDir, { withFileTypes: true });
     const backups: BackupRecord[] = [];
-    for (const instanceEntry of instanceEntries) {
-      if (!instanceEntry.isDirectory()) {
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
         continue;
       }
-      const instancePath = path.join(targetsRoot, instanceEntry.name);
-      const targetEntries = await fs.readdir(instancePath, { withFileTypes: true });
-      for (const targetEntry of targetEntries) {
-        if (!targetEntry.isDirectory()) {
-          continue;
-        }
-        const targetPath = path.join(instancePath, targetEntry.name);
-        const backupEntries = await fs.readdir(targetPath, { withFileTypes: true });
-        for (const backupEntry of backupEntries) {
-          if (!backupEntry.isDirectory()) {
-            continue;
-          }
-          const manifestPath = this.backupManifestPath(instanceEntry.name, targetEntry.name, backupEntry.name);
-          if (!(await exists(manifestPath))) {
-            continue;
-          }
+      const manifestPath = this.backupManifestPath(entry.name);
+      if (!(await exists(manifestPath))) {
+        continue;
+      }
 
-          try {
-            const manifest = validateTargetBackupManifest(
-              await this.readJsonFile<BackupManifest>(manifestPath),
-              manifestPath,
-            );
-            backups.push({
-              name: manifest.backupName,
-              rootPath: this.backupRootPath(manifest.instanceName, manifest.targetName, manifest.backupName),
-              manifestPath,
-              generatedAt: manifest.generatedAt,
-              scope: manifest.scope,
-              instanceName: manifest.instanceName,
-              targetName: manifest.targetName,
-              dashboardCount: manifest.dashboardCount,
-              dashboards: manifest.dashboards,
-            });
-          } catch {
-            continue;
-          }
-        }
+      try {
+        const manifest = validateBackupManifest(await this.readJsonFile<BackupManifest>(manifestPath), manifestPath);
+        backups.push({
+          name: manifest.backupName,
+          rootPath: this.backupRootPath(manifest.backupName),
+          manifestPath,
+          generatedAt: manifest.generatedAt,
+          scope: manifest.scope,
+          instanceCount: manifest.instanceCount,
+          targetCount: manifest.targetCount,
+          dashboardCount: manifest.dashboardCount,
+          instances: manifest.instances,
+        });
+      } catch {
+        continue;
       }
     }
 
-    return backups.sort((left, right) => {
-      const dateOrder = right.name.localeCompare(left.name);
-      if (dateOrder !== 0) {
-        return dateOrder;
-      }
-      const instanceOrder = left.instanceName.localeCompare(right.instanceName);
-      return instanceOrder !== 0 ? instanceOrder : left.targetName.localeCompare(right.targetName);
-    });
+    return backups.sort((left, right) => right.name.localeCompare(left.name));
   }
 
-  async readBackupRecord(instanceName: string, targetName: string, backupName: string): Promise<BackupRecord> {
+  async readBackupRecord(backupName: string): Promise<BackupRecord> {
     const backups = await this.listBackups();
-    const record = backups.find(
-      (backup) =>
-        backup.name === backupName && backup.instanceName === instanceName && backup.targetName === targetName,
-    );
+    const record = backups.find((backup) => backup.name === backupName);
     if (!record) {
-      throw new Error(`Backup not found: ${instanceName}/${targetName}/${backupName}`);
+      throw new Error(`Backup not found: ${backupName}`);
     }
     return record;
   }
 
   async readBackupDashboardSnapshot(
     backup: BackupRecord,
-    dashboard: TargetBackupDashboardRecord,
+    dashboard: BackupDashboardRecord,
   ): Promise<Record<string, unknown>> {
     return this.readJsonFile<Record<string, unknown>>(path.join(backup.rootPath, dashboard.snapshotPath));
   }
 
-  async deleteBackup(instanceName: string, targetName: string, backupName: string): Promise<void> {
-    const backupRoot = this.backupRootPath(instanceName, targetName, backupName);
+  async deleteBackup(backupName: string): Promise<void> {
+    const backupRoot = this.backupRootPath(backupName);
     if (await exists(backupRoot)) {
       await fs.rm(backupRoot, { recursive: true, force: true });
     }

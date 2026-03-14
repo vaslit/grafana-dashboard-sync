@@ -9,7 +9,7 @@ The extension manages a local dashboard project rooted by `.grafana-dashboard-wo
 - Pull dashboards from Grafana into a tracked repository layout.
 - Render dashboards per deployment target before deploy.
 - Deploy one dashboard, one target, one instance, or all instances.
-- Create and restore raw target backups.
+- Create and restore grouped raw backups for dashboards, targets, instances, and whole projects.
 - Manage deployment target placement overrides.
 - Rewrite datasource bindings per instance and per dashboard.
 - Store Grafana tokens in VS Code Secret Storage instead of plaintext files.
@@ -88,10 +88,24 @@ Deploy uses the rendered target state and can create raw backups before modifyin
 The `Backups` view manages snapshots under:
 
 ```text
-backups/targets/<instance>/<target>/<timestamp>/
+backups/<timestamp>/
 ```
 
-Managed backups store the live dashboard JSON, effective dashboard UID, and target folder path for each captured dashboard.
+Managed backups store the live dashboard JSON, effective dashboard UID, and target folder path for each captured dashboard in a grouped backup manifest.
+
+Supported backup scopes:
+
+- `dashboard`: one dashboard on one target
+- `target`: all dashboards on one target
+- `instance`: all dashboards across all targets of one instance
+- `multi-instance`: backups that span more than one instance, including full-project backups
+
+The `Backups` tree lets you restore:
+
+- the whole backup
+- one instance inside a multi-instance backup
+- one target inside an instance or multi-instance backup
+- one dashboard inside any backup that contains dashboards
 
 ## Datasource Mappings
 

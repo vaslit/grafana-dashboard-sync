@@ -131,9 +131,6 @@ class DetailsViewProvider {
             return this.renderMissingProject();
         }
         const manifestExists = await repository.manifestExists();
-        const backup = this.selectionState.selectedBackupName
-            ? (await repository.listBackups()).find((candidate) => candidate.rootPath === this.selectionState.selectedBackupName)
-            : undefined;
         const dashboard = this.selectionState.selectedDashboardSelectorName
             ? await repository.loadDashboardDetails(this.selectionState.selectedDashboardSelectorName)
             : undefined;
@@ -263,7 +260,6 @@ class DetailsViewProvider {
 </head>
 <body>
   ${this.renderManifestSection(manifestExists)}
-  ${this.renderBackupSection(backup)}
   ${this.renderDashboardSection(dashboard)}
   ${this.renderRevisionSection(dashboard, revisions, instance, target)}
   ${this.renderLiveTargetVersionsSection(dashboard, liveTargetVersions)}
@@ -551,33 +547,6 @@ class DetailsViewProvider {
       <div class="hint">This workspace config has no managed dashboards yet.</div>
       <div class="actions">
         <button data-command="createManifestFromExample">Import From Example</button>
-      </div>
-    </section>`;
-    }
-    renderBackupSection(backup) {
-        if (!backup) {
-            return `<section data-collapsible-section="backup">
-        <h2>Backup</h2>
-        <div class="hint">Select a target backup from the tree or create a new one for the current deployment target.</div>
-        <div class="actions">
-          <button data-command="createBackup">Create Target Backup</button>
-          <button data-command="createDashboardBackup">Create Dashboard Backup</button>
-        </div>
-      </section>`;
-        }
-        return `<section data-collapsible-section="backup">
-      <h2>Backup</h2>
-      <div class="hint">Selected backup: <strong>${escapeHtml(backup.name)}</strong></div>
-      <div class="small">Generated: ${escapeHtml(backup.generatedAt)}</div>
-      <div class="small">Scope: ${escapeHtml(backup.scope)}</div>
-      <div class="small">Target: ${escapeHtml(`${backup.instanceName}/${backup.targetName}`)}</div>
-      <div class="small">Dashboards: ${escapeHtml(String(backup.dashboardCount))}</div>
-      <div class="actions">
-        <button type="button" data-command="restoreBackup">Restore Backup</button>
-        <button type="button" class="secondary" data-command="openBackupFolder">Open Folder</button>
-        <button type="button" class="secondary" data-command="deleteBackup">Delete Backup</button>
-        <button type="button" class="secondary" data-command="createBackup">Create Target Backup</button>
-        <button type="button" class="secondary" data-command="createDashboardBackup">Create Dashboard Backup</button>
       </div>
     </section>`;
     }
@@ -961,21 +930,6 @@ class DetailsViewProvider {
         switch (message.type) {
             case "initializeProject":
                 await this.actions.initializeProject();
-                return;
-            case "createBackup":
-                await this.actions.createBackup();
-                return;
-            case "createDashboardBackup":
-                await this.actions.createDashboardBackup();
-                return;
-            case "restoreBackup":
-                await this.actions.restoreBackup();
-                return;
-            case "openBackupFolder":
-                await this.actions.openBackupFolder();
-                return;
-            case "deleteBackup":
-                await this.actions.deleteBackup();
                 return;
             case "createManifestFromExample":
                 await this.actions.createManifestFromExample();

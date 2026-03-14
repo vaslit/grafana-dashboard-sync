@@ -26,7 +26,10 @@ import {
 } from "./overrides";
 import { DEFAULT_DEPLOYMENT_TARGET, ProjectRepository } from "./repository";
 import {
+  BackupDashboardRecord,
   BackupRecord,
+  BackupRestoreSelection,
+  BackupScope,
   DashboardManifestEntry,
   DashboardOverrideFile,
   DashboardOverrideValue,
@@ -51,8 +54,7 @@ import {
   PullDashboardResult,
   PullFileResult,
   PullSummary,
-  TargetBackupDashboardRecord,
-  TargetBackupScope,
+  RestoreSummary,
 } from "./types";
 import { GrafanaClient } from "./grafanaClient";
 
@@ -63,6 +65,12 @@ interface PlacementDetails {
   baseDashboardUid: string;
   overrideDashboardUid?: string;
   effectiveDashboardUid?: string;
+}
+
+interface BackupCaptureTargetSpec {
+  instanceName: string;
+  targetName: string;
+  entries: DashboardManifestEntry[];
 }
 
 interface DashboardComparableSnapshot {
@@ -120,7 +128,7 @@ function folderPathFromChain(chain: GrafanaFolder[]): string | undefined {
   return chain.map((folder) => folder.title).join("/");
 }
 
-function backupScopeForEntries(entries: DashboardManifestEntry[]): TargetBackupScope {
+function backupScopeForEntries(entries: DashboardManifestEntry[]): BackupScope {
   return entries.length === 1 ? "dashboard" : "target";
 }
 
@@ -492,10 +500,10 @@ export class DashboardService {
     entries: DashboardManifestEntry[],
     instanceName: string,
     targetName: string,
-  ): Promise<Array<TargetBackupDashboardRecord & { dashboard: Record<string, unknown> }>> {
+  ): Promise<Array<BackupDashboardRecord & { dashboard: Record<string, unknown> }>> {
     const client = await this.clientFactory(instanceName);
     const folders = await client.listFolders();
-    const items: Array<TargetBackupDashboardRecord & { dashboard: Record<string, unknown> }> = [];
+    const items: Array<BackupDashboardRecord & { dashboard: Record<string, unknown> }> = [];
 
     for (const entry of entries) {
       const overrideFile = await this.materializeDashboardUidForTarget(this.repository, instanceName, targetName, entry);
@@ -526,16 +534,68 @@ export class DashboardService {
     return items;
   }
 
+  private mergeBackupCaptureSpecs(specs: BackupCaptureTargetSpec[]): BackupCaptureTargetSpec[] {
+    const merged = new Map<string, Map<string, DashboardManifestEntry>>();
+
+    for (const spec of specs) {
+      const targetKey = `${spec.instanceName}/${spec.targetName}`;
+      const targetEntries = merged.get(targetKey) ?? new Map<string, DashboardManifestEntry>();
+      for (const entry of spec.entries) {
+        targetEntries.set(selectorNameForEntry(entry), entry);
+      }
+      merged.set(targetKey, targetEntries);
+    }
+
+    return [...merged.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([targetKey, targetEntries]) => {
+        const [instanceName, targetName] = targetKey.split("/", 2);
+        return {
+          instanceName,
+          targetName,
+          entries: [...targetEntries.values()],
+        };
+      });
+  }
+
+  async createBackup(
+    specs: BackupCaptureTargetSpec[],
+    scope: BackupScope,
+  ): Promise<BackupRecord> {
+    const mergedSpecs = this.mergeBackupCaptureSpecs(specs).filter((spec) => spec.entries.length > 0);
+    if (mergedSpecs.length === 0) {
+      throw new Error("No dashboards available for backup.");
+    }
+
+    const targets = await Promise.all(
+      mergedSpecs.map(async (spec) => ({
+        instanceName: spec.instanceName,
+        targetName: spec.targetName,
+        dashboards: await this.rawTargetBackupItems(spec.entries, spec.instanceName, spec.targetName),
+      })),
+    );
+
+    const backup = await this.repository.createBackupSnapshot(scope, targets);
+    this.log.info(`Created ${scope} backup ${backup.name} across ${backup.targetCount} target(s).`);
+    return backup;
+  }
+
   async createTargetBackup(
     entries: DashboardManifestEntry[],
     instanceName: string,
     targetName: string,
-    scope: TargetBackupScope = backupScopeForEntries(entries),
+    scope: BackupScope = backupScopeForEntries(entries),
   ): Promise<BackupRecord> {
-    const items = await this.rawTargetBackupItems(entries, instanceName, targetName);
-    const backup = await this.repository.createTargetBackupSnapshot(instanceName, targetName, scope, items);
-    this.log.info(`Created ${scope} backup ${backup.name} for ${instanceName}/${targetName}`);
-    return backup;
+    return this.createBackup(
+      [
+        {
+          instanceName,
+          targetName,
+          entries,
+        },
+      ],
+      scope,
+    );
   }
 
   private async desiredFolderPathForSnapshot(
@@ -643,38 +703,125 @@ export class DashboardService {
     return currentFolder?.uid;
   }
 
-  async restoreTargetBackup(backup: BackupRecord): Promise<DeploySummary> {
-    const client = await this.clientFactory(backup.instanceName);
-    const connection = await this.repository.loadConnectionConfig(backup.instanceName);
-    const folderCache = await client.listFolders();
-    const dashboardResults: DeploySummary["dashboardResults"] = [];
+  private selectedBackupTargets(
+    backup: BackupRecord,
+    selection: BackupRestoreSelection,
+  ): Array<{ instanceName: string; targetName: string; dashboards: BackupDashboardRecord[] }> {
+    switch (selection.kind) {
+      case "backup":
+        return backup.instances.flatMap((instance) =>
+          instance.targets.map((target) => ({
+            instanceName: instance.instanceName,
+            targetName: target.targetName,
+            dashboards: target.dashboards,
+          })),
+        );
+      case "instance": {
+        const instance = backup.instances.find((candidate) => candidate.instanceName === selection.instanceName);
+        if (!instance) {
+          throw new Error(`Backup instance not found: ${selection.instanceName}`);
+        }
+        return instance.targets.map((target) => ({
+          instanceName: instance.instanceName,
+          targetName: target.targetName,
+          dashboards: target.dashboards,
+        }));
+      }
+      case "target": {
+        const instance = backup.instances.find((candidate) => candidate.instanceName === selection.instanceName);
+        const target = instance?.targets.find((candidate) => candidate.targetName === selection.targetName);
+        if (!instance || !target) {
+          throw new Error(`Backup target not found: ${selection.instanceName}/${selection.targetName}`);
+        }
+        return [
+          {
+            instanceName: instance.instanceName,
+            targetName: target.targetName,
+            dashboards: target.dashboards,
+          },
+        ];
+      }
+      case "dashboard": {
+        const instance = backup.instances.find((candidate) => candidate.instanceName === selection.instanceName);
+        const target = instance?.targets.find((candidate) => candidate.targetName === selection.targetName);
+        const dashboard = target?.dashboards.find((candidate) => candidate.selectorName === selection.selectorName);
+        if (!instance || !target || !dashboard) {
+          throw new Error(
+            `Backup dashboard not found: ${selection.instanceName}/${selection.targetName}/${selection.selectorName}`,
+          );
+        }
+        return [
+          {
+            instanceName: instance.instanceName,
+            targetName: target.targetName,
+            dashboards: [dashboard],
+          },
+        ];
+      }
+    }
+  }
 
-    for (const dashboard of backup.dashboards) {
-      const rawDashboard = await this.repository.readBackupDashboardSnapshot(backup, dashboard);
-      const folderUid = await this.ensureExplicitFolderPath(client, folderCache, dashboard.folderPath);
-      const response = await client.upsertDashboard({
-        dashboard: sanitizeDashboardForStorage(rawDashboard),
-        folderUid,
-        message: `Restore backup ${backup.name} from VS Code`,
-      });
-      dashboardResults.push({
-        entry: {
-          name: dashboard.selectorName,
-          uid: dashboard.baseUid,
-          path: dashboard.path,
-        },
-        selectorName: dashboard.selectorName,
-        dashboardTitle: dashboard.title,
-        folderUid,
-        url: response.url,
-        targetBaseUrl: connection.baseUrl,
-        deploymentTargetName: backup.targetName,
-      });
+  async restoreBackup(
+    backup: BackupRecord,
+    selection: BackupRestoreSelection = { kind: "backup" },
+  ): Promise<RestoreSummary> {
+    const selectedTargets = this.selectedBackupTargets(backup, selection);
+    const dashboardResults: RestoreSummary["dashboardResults"] = [];
+    const restoredInstances = new Set<string>();
+    const restoredTargets = new Set<string>();
+    const clients = new Map<
+      string,
+      {
+        client: GrafanaApi;
+        baseUrl: string;
+        folderCache: GrafanaFolder[];
+      }
+    >();
+
+    for (const target of selectedTargets) {
+      let runtime = clients.get(target.instanceName);
+      if (!runtime) {
+        const client = await this.clientFactory(target.instanceName);
+        const connection = await this.repository.loadConnectionConfig(target.instanceName);
+        runtime = {
+          client,
+          baseUrl: connection.baseUrl,
+          folderCache: await client.listFolders(),
+        };
+        clients.set(target.instanceName, runtime);
+      }
+
+      restoredInstances.add(target.instanceName);
+      restoredTargets.add(`${target.instanceName}/${target.targetName}`);
+
+      for (const dashboard of target.dashboards) {
+        const rawDashboard = await this.repository.readBackupDashboardSnapshot(backup, dashboard);
+        const folderUid = await this.ensureExplicitFolderPath(runtime.client, runtime.folderCache, dashboard.folderPath);
+        const response = await runtime.client.upsertDashboard({
+          dashboard: sanitizeDashboardForStorage(rawDashboard),
+          folderUid,
+          message: `Restore backup ${backup.name} from VS Code`,
+        });
+        dashboardResults.push({
+          entry: {
+            name: dashboard.selectorName,
+            uid: dashboard.baseUid,
+            path: dashboard.path,
+          },
+          selectorName: dashboard.selectorName,
+          dashboardTitle: dashboard.title,
+          folderUid,
+          url: response.url,
+          targetBaseUrl: runtime.baseUrl,
+          deploymentTargetName: target.targetName,
+        });
+      }
     }
 
     return {
-      instanceName: backup.instanceName,
-      deploymentTargetName: backup.targetName,
+      instanceCount: restoredInstances.size,
+      targetCount: restoredTargets.size,
+      dashboardCount: dashboardResults.length,
       dashboardResults,
     };
   }
