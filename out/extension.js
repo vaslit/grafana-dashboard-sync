@@ -739,11 +739,13 @@ async function activate(context) {
     const dashboardSelectionDisposable = dashboardTreeView.onDidChangeSelection((event) => {
         const item = event.selection[0];
         if (item instanceof dashboardTreeProvider_1.DashboardTreeItem) {
+            selectionState.setDetailsMode("dashboard");
             selectionState.setDashboard(item.record.selectorName);
             instancesProvider.refresh();
             void detailsProvider.refresh();
         }
         else if (item instanceof dashboardTreeProvider_1.DashboardInstanceTreeItem) {
+            selectionState.setDetailsMode("dashboard");
             selectionState.setDashboard(item.record.selectorName);
             selectionState.setInstance(item.instance.name);
             void repository?.deploymentTargetByName(item.instance.name, repository_1.DEFAULT_DEPLOYMENT_TARGET).then((target) => {
@@ -753,6 +755,7 @@ async function activate(context) {
             void detailsProvider.refresh();
         }
         else if (item instanceof dashboardTreeProvider_1.DashboardTargetTreeItem) {
+            selectionState.setDetailsMode("dashboard");
             selectionState.setDashboard(item.record.selectorName);
             selectionState.setInstance(item.target.instanceName);
             selectionState.setTarget(item.target.name);
@@ -763,6 +766,7 @@ async function activate(context) {
     const instanceSelectionDisposable = instanceTreeView.onDidChangeSelection((event) => {
         const item = event.selection[0];
         if (item instanceof instanceTreeProvider_1.InstanceTreeItem) {
+            selectionState.setDetailsMode("instance");
             selectionState.setInstance(item.instance.name);
             void repository?.deploymentTargetByName(item.instance.name, repository_1.DEFAULT_DEPLOYMENT_TARGET).then((target) => {
                 selectionState.setTarget(target?.name);
@@ -770,11 +774,13 @@ async function activate(context) {
             void detailsProvider.refresh();
         }
         else if (item instanceof instanceTreeProvider_1.DeploymentTargetTreeItem) {
+            selectionState.setDetailsMode("instance");
             selectionState.setInstance(item.target.instanceName);
             selectionState.setTarget(item.target.name);
             void detailsProvider.refresh();
         }
         else if (item instanceof instanceTreeProvider_1.InstanceTargetDashboardTreeItem) {
+            selectionState.setDetailsMode("dashboard");
             selectionState.setDashboard(item.record.selectorName);
             selectionState.setInstance(item.target.instanceName);
             selectionState.setTarget(item.target.name);

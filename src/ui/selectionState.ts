@@ -7,6 +7,7 @@ export class SelectionState {
   private instanceName?: string;
   private targetName?: string;
   private backupName?: string;
+  private detailsMode?: "dashboard" | "instance";
 
   readonly onDidChange = this.changeEmitter.event;
 
@@ -24,6 +25,10 @@ export class SelectionState {
 
   get selectedBackupName(): string | undefined {
     return this.backupName;
+  }
+
+  get selectedDetailsMode(): "dashboard" | "instance" | undefined {
+    return this.detailsMode;
   }
 
   setDashboard(selectorName: string | undefined): void {
@@ -56,6 +61,14 @@ export class SelectionState {
       return;
     }
     this.backupName = backupName;
+    this.changeEmitter.fire();
+  }
+
+  setDetailsMode(mode: "dashboard" | "instance" | undefined): void {
+    if (this.detailsMode === mode) {
+      return;
+    }
+    this.detailsMode = mode;
     this.changeEmitter.fire();
   }
 }

@@ -130,14 +130,16 @@ class DetailsViewProvider {
         if (!service) {
             return this.renderMissingProject();
         }
+        const detailsMode = this.selectionState.selectedDetailsMode ??
+            (this.selectionState.selectedDashboardSelectorName ? "dashboard" : this.selectionState.selectedInstanceName ? "instance" : undefined);
         const manifestExists = await repository.manifestExists();
-        const dashboard = this.selectionState.selectedDashboardSelectorName
+        const dashboard = detailsMode === "dashboard" && this.selectionState.selectedDashboardSelectorName
             ? await repository.loadDashboardDetails(this.selectionState.selectedDashboardSelectorName)
             : undefined;
         const instance = this.selectionState.selectedInstanceName
             ? await repository.loadInstanceDetails(this.selectionState.selectedInstanceName)
             : undefined;
-        const target = instance && this.selectionState.selectedTargetName
+        const target = detailsMode === "dashboard" && instance && this.selectionState.selectedTargetName
             ? await repository.loadDeploymentTargetDetails(instance.instance.name, this.selectionState.selectedTargetName)
             : undefined;
         let datasourceOptions = [];
@@ -158,6 +160,9 @@ class DetailsViewProvider {
                 folderPathLoadError = String(error);
             }
         }
+        const instanceDatasourceRows = detailsMode === "instance" && instance
+            ? await this.buildInstanceDatasourceRows(instance.instance.name)
+            : [];
         const datasourceRows = dashboard && instance
             ? await this.buildDatasourceRows(instance.instance.name, dashboard.entry, datasourceOptions)
             : [];
@@ -263,8 +268,8 @@ class DetailsViewProvider {
   ${this.renderDashboardSection(dashboard)}
   ${this.renderRevisionSection(dashboard, revisions, instance, target)}
   ${this.renderLiveTargetVersionsSection(dashboard, liveTargetVersions)}
-  ${this.renderInstanceSection(instance, target)}
-  ${this.renderDatasourceSection(dashboard, instance, target, datasourceRows, datasourceOptions, datasourceLoadError)}
+  ${detailsMode === "instance" ? this.renderInstanceSection(instance, target) : ""}
+  ${this.renderDatasourceSection(dashboard, instance, target, datasourceRows, datasourceOptions, datasourceLoadError, detailsMode, instanceDatasourceRows)}
   ${this.renderPlacementSection(dashboard, instance, target, placement, folderPathOptions, folderPathLoadError)}
   ${this.renderOverrideSection(dashboard, instance, target, overrideVariables)}
   <script nonce="${scriptNonce}">
@@ -726,6 +731,61 @@ class DetailsViewProvider {
         }
         return [...rowMap.values()].sort((left, right) => left.sourceLabel.localeCompare(right.sourceLabel));
     }
+    async buildInstanceDatasourceRows(instanceName) {
+        const repository = this.getRepository();
+        if (!repository) {
+            return [];
+        }
+        const records = await repository.listDashboardRecords();
+        const datasourceCatalog = await repository.readDatasourceCatalog();
+        const rowMap = new Map();
+        for (const record of records) {
+            if (!record.exists) {
+                continue;
+            }
+            const dashboard = await repository.readDashboardJson(record.entry).catch(() => undefined);
+            if (!dashboard) {
+                continue;
+            }
+            const descriptors = (0, datasourceRefs_1.buildDashboardDatasourceDescriptors)(dashboard);
+            for (const descriptor of descriptors) {
+                const sourceName = descriptor.sourceUid;
+                const target = datasourceCatalog.datasources[sourceName]?.instances[instanceName];
+                const existing = rowMap.get(sourceName);
+                if (existing) {
+                    existing.usageCount += descriptor.usageCount;
+                    existing.sourceType ??= descriptor.type;
+                    for (const usageKind of descriptor.usageKinds) {
+                        if (!existing.usageKinds.includes(usageKind)) {
+                            existing.usageKinds.push(usageKind);
+                        }
+                    }
+                    if (!existing.dashboards.includes(record.selectorName)) {
+                        existing.dashboards.push(record.selectorName);
+                    }
+                    existing.targetUid ??= target?.uid;
+                    existing.targetName ??= target?.name;
+                    continue;
+                }
+                rowMap.set(sourceName, {
+                    sourceName,
+                    sourceType: descriptor.type,
+                    usageCount: descriptor.usageCount,
+                    usageKinds: [...descriptor.usageKinds],
+                    dashboards: [record.selectorName],
+                    targetUid: target?.uid,
+                    targetName: target?.name,
+                });
+            }
+        }
+        return [...rowMap.values()]
+            .map((row) => ({
+            ...row,
+            dashboards: [...row.dashboards].sort((left, right) => left.localeCompare(right)),
+            usageKinds: [...row.usageKinds].sort(),
+        }))
+            .sort((left, right) => left.sourceName.localeCompare(right.sourceName));
+    }
     renderDatasourceRows(rows, prefix, datasourceOptions) {
         return rows
             .map((row, index) => {
@@ -765,15 +825,41 @@ class DetailsViewProvider {
         })
             .join("");
     }
-    renderDatasourceSection(dashboard, instance, target, rows, datasourceOptions, datasourceLoadError) {
+    renderDatasourceSection(dashboard, instance, target, rows, datasourceOptions, datasourceLoadError, detailsMode, instanceRows = []) {
         if (!instance) {
             return "";
         }
-        if (!dashboard || !target) {
+        if (detailsMode === "instance") {
+            const loadError = datasourceLoadError !== undefined
+                ? `<div class="hint">Could not load datasources from Grafana for <strong>${escapeHtml(instance.instance.name)}</strong>: ${escapeHtml(datasourceLoadError)}</div>`
+                : "";
+            const rowsMarkup = instanceRows.length === 0
+                ? `<div class="hint">No tracked dashboard datasources are currently used for this instance.</div>`
+                : instanceRows
+                    .map((row) => {
+                    const mappedTarget = row.targetUid
+                        ? `${row.targetName ?? "(unknown)"} (${row.targetUid})`
+                        : "(not mapped)";
+                    return `<div class="grid" style="padding: 8px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 6px;">
+                  <div><strong>${escapeHtml(row.sourceName)}</strong></div>
+                  <div class="small">Type: ${escapeHtml(row.sourceType ?? "-")}, used in: ${escapeHtml(row.usageKinds.join(" + "))}</div>
+                  <div class="small">Mapped target datasource: ${escapeHtml(mappedTarget)}</div>
+                  <div class="small">Dashboards: ${escapeHtml(row.dashboards.join(", "))}</div>
+                </div>`;
+                })
+                    .join("");
             return `<section data-collapsible-section="datasources">
         <h2>Datasources</h2>
-        <div class="hint">Select a dashboard and deployment target to configure datasources.</div>
+        <div class="hint">Datasources used by managed dashboards for <strong>${escapeHtml(instance.instance.name)}</strong>.</div>
+        <div class="small">Tracked datasource entries: ${escapeHtml(String(instanceRows.length))}</div>
+        ${loadError}
+        <div class="grid" style="margin-top: 8px;">
+          ${rowsMarkup}
+        </div>
       </section>`;
+        }
+        if (!dashboard || !target) {
+            return "";
         }
         const dashboardRows = this.renderDatasourceRows(rows, "dashboard", datasourceOptions);
         const emptyState = rows.length === 0

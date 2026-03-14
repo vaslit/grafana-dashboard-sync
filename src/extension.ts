@@ -890,10 +890,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const dashboardSelectionDisposable = dashboardTreeView.onDidChangeSelection((event) => {
     const item = event.selection[0];
     if (item instanceof DashboardTreeItem) {
+      selectionState.setDetailsMode("dashboard");
       selectionState.setDashboard(item.record.selectorName);
       instancesProvider.refresh();
       void detailsProvider.refresh();
     } else if (item instanceof DashboardInstanceTreeItem) {
+      selectionState.setDetailsMode("dashboard");
       selectionState.setDashboard(item.record.selectorName);
       selectionState.setInstance(item.instance.name);
       void repository?.deploymentTargetByName(item.instance.name, DEFAULT_DEPLOYMENT_TARGET).then((target) => {
@@ -902,6 +904,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       instancesProvider.refresh();
       void detailsProvider.refresh();
     } else if (item instanceof DashboardTargetTreeItem) {
+      selectionState.setDetailsMode("dashboard");
       selectionState.setDashboard(item.record.selectorName);
       selectionState.setInstance(item.target.instanceName);
       selectionState.setTarget(item.target.name);
@@ -913,16 +916,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const instanceSelectionDisposable = instanceTreeView.onDidChangeSelection((event) => {
     const item = event.selection[0];
     if (item instanceof InstanceTreeItem) {
+      selectionState.setDetailsMode("instance");
       selectionState.setInstance(item.instance.name);
       void repository?.deploymentTargetByName(item.instance.name, DEFAULT_DEPLOYMENT_TARGET).then((target) => {
         selectionState.setTarget(target?.name);
       });
       void detailsProvider.refresh();
     } else if (item instanceof DeploymentTargetTreeItem) {
+      selectionState.setDetailsMode("instance");
       selectionState.setInstance(item.target.instanceName);
       selectionState.setTarget(item.target.name);
       void detailsProvider.refresh();
     } else if (item instanceof InstanceTargetDashboardTreeItem) {
+      selectionState.setDetailsMode("dashboard");
       selectionState.setDashboard(item.record.selectorName);
       selectionState.setInstance(item.target.instanceName);
       selectionState.setTarget(item.target.name);
