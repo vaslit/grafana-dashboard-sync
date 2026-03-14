@@ -4,6 +4,8 @@
 
 The extension manages a local dashboard project rooted by `.grafana-dashboard-workspace.json` and adds a dedicated Grafana activity bar with dashboard, instance, backup, and details views.
 
+Usage documentation is available in [USAGE.md](USAGE.md).
+
 ## Features
 
 - Pull dashboards from Grafana into a tracked repository layout.
@@ -38,16 +40,16 @@ Minimal workspace marker:
 }
 ```
 
-You can keep the Grafana project at the workspace root or inside a subfolder. The `Initialize Grafana Dashboard Project` command bootstraps the required structure.
+You can keep the Grafana project at the workspace root or inside a subfolder. The `Grafana Sync: Initialize Grafana Dashboard Project` command bootstraps the required structure.
 
 Instance and deployment-target definitions live in `.grafana-dashboard-workspace.json`, not in a dedicated `instances/` folder.
 
 ## Getting Started
 
 1. Open the folder that should contain your Grafana dashboard project in VS Code.
-2. Run `Initialize Grafana Dashboard Project` if the project structure does not exist yet.
+2. Run `Grafana Sync: Initialize Grafana Dashboard Project` if the project structure does not exist yet.
 3. Create one or more instances in the `Instances` view.
-4. Set an API token for each instance with `Set Instance Token`.
+4. Set an API token for each instance with `Grafana Sync: Set Instance Token`.
 5. Add dashboards to the manifest or pull them from a remote Grafana instance.
 6. Render and deploy using the activity bar views or command palette.
 
@@ -55,18 +57,18 @@ Instance and deployment-target definitions live in `.grafana-dashboard-workspace
 
 ### Pull
 
-- `Pull Dashboard`
-- `Pull All Managed Dashboards`
+- `Grafana Sync: Pull Dashboard From Dev Target`
+- pull actions from the `Dashboards` and `Instances` trees use the same dev-target rule
 
 These commands fetch dashboards from the selected instance and persist them into `dashboards/` according to the manifest.
 
 ### Render
 
-- `Render Dashboard`
-- `Render Target`
-- `Render Instance`
-- `Render All Instances`
-- `Open Render Folder`
+- `Grafana Sync: Render Dashboard`
+- `Grafana Sync: Render Target`
+- `Grafana Sync: Render Instance`
+- `Grafana Sync: Render All Instances`
+- `Grafana Sync: Open Render Folder`
 
 Rendered artifacts are written to:
 
@@ -78,8 +80,8 @@ Each render produces dashboard JSON files plus `.render-manifest.json` with reso
 
 ### Deploy
 
-- `Deploy Dashboard`
-- `Restore Backup`
+- `Grafana Sync: Deploy Dashboard`
+- `Grafana Sync: Restore Backup`
 
 Deploy uses the rendered target state and can create raw backups before modifying live dashboards.
 
