@@ -8,17 +8,19 @@ as long as VS Code is installed and `code` is available.
 VS Code ships its own Node runtime. Run it like this:
 
 ```bash
-ELECTRON_RUN_AS_NODE=1 /usr/share/code/code -e "console.log(process.version)"
+ELECTRON_RUN_AS_NODE=1 code -e "console.log(process.version)"
 ```
 
 In this repository, the working build flow is:
 
 ```bash
-ELECTRON_RUN_AS_NODE=1 /usr/share/code/code ./node_modules/typescript/bin/tsc -p ./
-ELECTRON_RUN_AS_NODE=1 /usr/share/code/code --test ./out/test/*.test.js
-ELECTRON_RUN_AS_NODE=1 /usr/share/code/code ./node_modules/@vscode/vsce/vsce package --no-dependencies -o grafana-dashboard-sync-<version>-local.vsix
+ELECTRON_RUN_AS_NODE=1 code ./node_modules/typescript/bin/tsc -p ./
+ELECTRON_RUN_AS_NODE=1 code --test ./out/test/*.test.js
+ELECTRON_RUN_AS_NODE=1 code ./node_modules/@vscode/vsce/vsce package --no-dependencies -o grafana-dashboard-sync-<version>-local.vsix
 code --install-extension ./grafana-dashboard-sync-<version>-local.vsix --force
 ```
+
+If `code` is not on `PATH`, replace it with the actual VS Code executable path for your OS.
 
 ## Why `--no-dependencies`
 

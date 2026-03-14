@@ -1,4 +1,5 @@
 node_modules/
+out/
 .tools/
 .npm/
 backups/
@@ -6,6 +7,8 @@ dashboards/
 instances/
 renders/
 *.vsix
+DEVELOPMENT_AND_DELIVERY.pdf
+AGENTS.md
 .vscode-test/
 
 .DS_Store

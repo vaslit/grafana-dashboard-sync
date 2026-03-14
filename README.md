@@ -164,7 +164,7 @@ Test:
 npm test
 ```
 
-If the shell does not have `node`/`npm`, but VS Code is installed, see [LOCAL_BUILD.md](/home/vase/Projects/grafana-dashboard-sync/LOCAL_BUILD.md) for the fallback build and install flow using the Node runtime bundled with VS Code.
+If the shell does not have `node`/`npm`, but VS Code is installed, see [LOCAL_BUILD.md](LOCAL_BUILD.md) for the fallback build and install flow using the Node runtime bundled with VS Code.
 
 Run the extension in a development host by opening this repository in VS Code and pressing `F5`.
 

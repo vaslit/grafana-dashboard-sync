@@ -4,11 +4,11 @@ This repository is prepared for a public release under these defaults:
 
 - GitHub repository: `vaslit/grafana-dashboard-sync`
 - VS Code Marketplace publisher: `vaslit`
-- Extension version: `0.7.0`
+- Extension version: `0.8.10`
 
 ## GitHub Releases Automation
 
-GitHub Actions publishes a release automatically on pushes to `main` when the `version` field in [package.json](/home/vase/Projects/grafana-dashboard-sync/package.json) changes.
+GitHub Actions publishes a release automatically on pushes to `main` when the `version` field in [package.json](package.json) changes.
 
 Automation behavior:
 
@@ -20,7 +20,7 @@ Automation behavior:
 - uploads `grafana-dashboard-sync-<version>.vsix`
 - supports manual `workflow_dispatch` with `force_release=true` for a one-off release without a version bump
 
-If your actual GitHub owner or Marketplace publisher differs, update [package.json](/home/vase/Projects/grafana-dashboard-sync/package.json) before publishing.
+If your actual GitHub owner or Marketplace publisher differs, update [package.json](package.json) before publishing.
 
 ## GitHub
 
@@ -42,7 +42,7 @@ git@github.com:vaslit/grafana-dashboard-sync.git
 
 1. Create a publisher in the Visual Studio Marketplace management portal.
 2. Create a Personal Access Token that can publish extensions.
-3. Confirm that `publisher` in [package.json](/home/vase/Projects/grafana-dashboard-sync/package.json) exactly matches the Marketplace publisher ID.
+3. Confirm that `publisher` in [package.json](package.json) exactly matches the Marketplace publisher ID.
 4. Publish:
 
 ```bash
@@ -78,5 +78,5 @@ npm run package
 Expected artifact:
 
 ```text
-grafana-dashboard-sync-0.7.0.vsix
+grafana-dashboard-sync-0.8.10.vsix
 ```
