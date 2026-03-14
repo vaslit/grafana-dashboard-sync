@@ -8,6 +8,7 @@ import {
   DeploymentTargetDetailsModel,
   GlobalDatasourceUsageRow,
   GrafanaDatasourceSummary,
+  GrafanaFolder,
   InstanceDetailsModel,
   LiveTargetVersionStatus,
   OverrideEditorVariableModel,
@@ -32,7 +33,6 @@ interface DetailsActionHandlers {
     selectorName: string,
     values: Record<string, string>,
   ): Promise<void>;
-  pickPlacementFolder(instanceName: string, targetName: string, selectorName: string): Promise<void>;
   savePlacement(instanceName: string, targetName: string, selectorName: string, values: Record<string, string>): Promise<void>;
   setInstanceToken(): Promise<void>;
   clearInstanceToken(): Promise<void>;
@@ -87,6 +87,26 @@ interface InstanceDatasourceSummaryRow {
   instanceName?: string;
 }
 
+interface PlacementBrowserState {
+  key: string;
+  inputPath: string;
+  isOpen: boolean;
+  currentChain: GrafanaFolder[];
+  children: GrafanaFolder[];
+  knownPaths?: string[];
+  browserError?: string;
+  knownPathsError?: string;
+}
+
+interface PlacementViewModel {
+  inputPath: string;
+  isOpen: boolean;
+  currentPath?: string;
+  children: GrafanaFolder[];
+  browserError?: string;
+  missingPathWarning?: string;
+}
+
 function optionLabel(option: GrafanaDatasourceSummary): string {
   return option.isDefault ? `${option.name} (${option.uid}) [default]` : `${option.name} (${option.uid})`;
 }
@@ -106,8 +126,25 @@ function usageLabel(row: DatasourceMappingRow): string {
   return labels.length > 0 ? labels.join(" + ") : String(row.usageCount ?? 0);
 }
 
+function normalizeFolderPathValue(value: string | undefined): string | undefined {
+  const normalized = (value ?? "")
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .join("/");
+  return normalized || undefined;
+}
+
+function folderPathFromChain(chain: GrafanaFolder[]): string | undefined {
+  if (chain.length === 0) {
+    return undefined;
+  }
+  return chain.map((folder) => folder.title).join("/");
+}
+
 export class DetailsViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
+  private placementBrowserState?: PlacementBrowserState;
 
   constructor(
     private readonly getRepository: () => ProjectRepository | undefined,
@@ -213,6 +250,10 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
       dashboard && instance && target
         ? await service.buildPlacementDetails(instance.instance.name, target.target.name, dashboard.entry).catch(() => undefined)
         : undefined;
+    const placementView =
+      dashboard && instance && target
+        ? await this.resolvePlacementViewModel(dashboard, instance, target, placement)
+        : undefined;
 
     const scriptNonce = nonce();
 
@@ -307,7 +348,7 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
   ${detailsMode === "instance" ? this.renderInstanceSection(instance, target) : ""}
   ${this.renderDatasourceSection(dashboard, instance, target, datasourceRows, datasourceOptions, datasourceLoadError, detailsMode, instanceDatasourceRows)}
   ${detailsMode === "instance" ? this.renderTargetDashboardSection(instance, this.selectionState.selectedTargetName, targetDashboardRows) : ""}
-  ${detailsMode === "dashboard" ? this.renderPlacementSection(dashboard, instance, target, placement) : ""}
+  ${detailsMode === "dashboard" ? this.renderPlacementSection(dashboard, instance, target, placement, placementView) : ""}
   ${detailsMode === "dashboard" ? this.renderOverrideSection(dashboard, instance, target, overrideVariables) : ""}
   <script nonce="${scriptNonce}">
     const vscode = acquireVsCodeApi();
@@ -419,6 +460,18 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
       });
     }
 
+    const placementInput = document.getElementById("placement-folder-path");
+    if (placementInput) {
+      placementInput.addEventListener("change", () => {
+        vscode.postMessage({
+          type: "placementInputChanged",
+          payload: {
+            folderPath: placementInput.value,
+          },
+        });
+      });
+    }
+
     const createInstanceForm = document.getElementById("create-instance-form");
     if (createInstanceForm) {
       createInstanceForm.addEventListener("submit", (event) => {
@@ -460,18 +513,12 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
         if (target) {
           target.disabled = !checkbox.checked;
         }
+        document.querySelectorAll('[data-placement-control="' + checkbox.dataset.placementToggle + '"]').forEach((control) => {
+          control.disabled = !checkbox.checked;
+        });
       };
       checkbox.addEventListener("change", syncEnabled);
       syncEnabled();
-    });
-
-    document.querySelectorAll("select[data-placement-target]").forEach((select) => {
-      select.addEventListener("change", () => {
-        const target = document.getElementById(select.dataset.placementTarget);
-        if (target && select.value) {
-          target.value = select.value;
-        }
-      });
     });
   </script>
 </body>
@@ -937,6 +984,118 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
     </section>`;
   }
 
+  private placementContextKey(instanceName: string, targetName: string, selectorName: string): string {
+    return `${instanceName}/${targetName}/${selectorName}`;
+  }
+
+  private async resolvePlacementViewModel(
+    dashboard: DashboardDetailsModel | undefined,
+    instance: InstanceDetailsModel | undefined,
+    target: DeploymentTargetDetailsModel | undefined,
+    placement:
+      | {
+          baseFolderPath?: string;
+          overrideFolderPath?: string;
+          baseDashboardUid?: string;
+          overrideDashboardUid?: string;
+          effectiveDashboardUid?: string;
+        }
+      | undefined,
+  ): Promise<PlacementViewModel | undefined> {
+    if (!dashboard || !instance || !target) {
+      this.placementBrowserState = undefined;
+      return undefined;
+    }
+
+    const key = this.placementContextKey(instance.instance.name, target.target.name, dashboard.selectorName);
+    const defaultInputPath = placement?.overrideFolderPath ?? placement?.baseFolderPath ?? "";
+    if (!this.placementBrowserState || this.placementBrowserState.key !== key) {
+      this.placementBrowserState = {
+        key,
+        inputPath: defaultInputPath,
+        isOpen: false,
+        currentChain: [],
+        children: [],
+      };
+    }
+
+    const state = this.placementBrowserState;
+    const service = this.getService();
+    if (!service) {
+      return {
+        inputPath: state.inputPath,
+        isOpen: state.isOpen,
+        currentPath: folderPathFromChain(state.currentChain),
+        children: state.children,
+        browserError: "Grafana service is not available.",
+      };
+    }
+
+    if (state.knownPaths === undefined && state.knownPathsError === undefined) {
+      try {
+        state.knownPaths = await service.listRemoteFolderPaths(instance.instance.name);
+      } catch (error) {
+        state.knownPathsError = String(error);
+      }
+    }
+
+    const normalizedInputPath = normalizeFolderPathValue(state.inputPath);
+    const missingPathWarning =
+      normalizedInputPath && state.knownPaths && !state.knownPaths.includes(normalizedInputPath)
+        ? `Folder path "${normalizedInputPath}" does not currently exist in ${instance.instance.name}/${target.target.name}.`
+        : undefined;
+
+    return {
+      inputPath: state.inputPath,
+      isOpen: state.isOpen,
+      currentPath: folderPathFromChain(state.currentChain),
+      children: state.children,
+      browserError: state.browserError ?? state.knownPathsError,
+      missingPathWarning,
+    };
+  }
+
+  private async openPlacementBrowser(instanceName: string): Promise<void> {
+    const state = this.placementBrowserState;
+    const service = this.getService();
+    if (!state || !service) {
+      return;
+    }
+
+    state.isOpen = true;
+    state.currentChain = [];
+    try {
+      state.children = await service.listFolderChildren(instanceName);
+      state.browserError = undefined;
+      if (state.knownPaths === undefined) {
+        state.knownPathsError = undefined;
+      }
+    } catch (error) {
+      state.children = [];
+      state.browserError = String(error);
+    }
+  }
+
+  private async navigatePlacementBrowser(instanceName: string, chain: GrafanaFolder[]): Promise<void> {
+    const state = this.placementBrowserState;
+    const service = this.getService();
+    if (!state || !service) {
+      return;
+    }
+
+    state.currentChain = chain;
+    try {
+      state.children = await service.listFolderChildren(instanceName, chain.at(-1)?.uid);
+      state.browserError = undefined;
+      if (state.knownPaths === undefined) {
+        state.knownPathsError = undefined;
+      }
+    } catch (error) {
+      state.children = [];
+      state.browserError = String(error);
+    }
+  }
+
   private renderPlacementSection(
     dashboard: DashboardDetailsModel | undefined,
     instance: InstanceDetailsModel | undefined,
@@ -945,17 +1104,54 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
       baseFolderPath?: string;
       overrideFolderPath?: string;
       baseDashboardUid?: string;
-      overrideDashboardUid?: string;
-      effectiveDashboardUid?: string;
-    },
+        overrideDashboardUid?: string;
+        effectiveDashboardUid?: string;
+      },
+    placementView?: PlacementViewModel,
   ): string {
     if (!dashboard || !instance || !target) {
       return "";
     }
 
     const inputId = "placement-folder-path";
-    const checked = placement?.overrideFolderPath ? ' checked="checked"' : "";
-    const value = placement?.overrideFolderPath ?? placement?.baseFolderPath ?? "";
+    const browseButtonId = "placement-browse-button";
+    const checked = placementView?.inputPath && placementView.inputPath !== (placement?.baseFolderPath ?? "") ? ' checked="checked"' : placement?.overrideFolderPath ? ' checked="checked"' : "";
+    const value = placementView?.inputPath ?? placement?.overrideFolderPath ?? placement?.baseFolderPath ?? "";
+    const browserRows = placementView?.isOpen
+      ? [
+          placementView.currentPath
+            ? `<button type="button" class="secondary" data-command="placementNavigateUp">..</button>`
+            : "",
+          ...(placementView.children.length > 0
+            ? placementView.children.map(
+                (folder) =>
+                  `<button type="button" class="secondary" data-command="placementEnterFolder" data-payload="${escapeHtml(
+                    JSON.stringify({ uid: folder.uid, title: folder.title }),
+                  )}">${escapeHtml(folder.title)}</button>`,
+              )
+            : [`<div class="hint">No child folders at this level.</div>`]),
+        ]
+          .filter(Boolean)
+          .join("")
+      : "";
+    const browserError = placementView?.browserError
+      ? `<div class="small" style="color: var(--vscode-errorForeground);">${escapeHtml(placementView.browserError)}</div>`
+      : "";
+    const missingWarning = placementView?.missingPathWarning
+      ? `<div class="small" style="color: var(--vscode-editorWarning-foreground);">${escapeHtml(placementView.missingPathWarning)}</div>`
+      : "";
+    const browser =
+      placementView?.isOpen
+        ? `<div style="border: 1px solid var(--vscode-editorWidget-border); border-radius: 6px; padding: 8px; display: grid; gap: 8px;">
+            <div class="small">Current browser path: ${escapeHtml(placementView.currentPath ?? "(root)")}</div>
+            ${browserError}
+            <div class="grid">${browserRows}</div>
+            <div class="actions">
+              <button type="button" data-command="placementConfirm">OK</button>
+              <button type="button" class="secondary" data-command="placementCancel">Cancel</button>
+            </div>
+          </div>`
+        : "";
 
     return `<section data-collapsible-section="placement">
       <h2>Placement</h2>
@@ -970,7 +1166,6 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
             id="${inputId}"
             type="text"
             name="folderPath"
-            readonly="readonly"
             value="${escapeHtml(value)}"
           />
           <input
@@ -981,8 +1176,17 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
             aria-label="Enable folder path override"${checked}
           />
         </div>
+        <div class="small">Current value: ${escapeHtml(normalizeFolderPathValue(value) ?? "(root)")}</div>
+        ${missingWarning}
+        ${browser}
         <div class="actions">
-          <button type="button" class="secondary" data-command="pickPlacementFolder">Choose Folder...</button>
+          <button
+            id="${browseButtonId}"
+            type="button"
+            class="secondary"
+            data-command="openPlacementBrowser"
+            data-placement-control="${inputId}"
+          >Browse Folders</button>
           <button type="submit">Save Placement</button>
         </div>
       </form>
@@ -1159,13 +1363,62 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
         if (!dashboardSelector || !instanceName || !targetName) {
           throw new Error("Select a dashboard and deployment target to save placement.");
         }
+        if (this.placementBrowserState) {
+          this.placementBrowserState.inputPath = (message.payload as Record<string, string>)?.folderPath ?? "";
+        }
         await this.actions.savePlacement(instanceName, targetName, dashboardSelector, message.payload as Record<string, string>);
         return;
-      case "pickPlacementFolder":
-        if (!dashboardSelector || !instanceName || !targetName) {
-          throw new Error("Select a dashboard and deployment target to choose placement.");
+      case "placementInputChanged":
+        if (this.placementBrowserState) {
+          this.placementBrowserState.inputPath = ((message.payload as Record<string, string>)?.folderPath ?? "").trim();
         }
-        await this.actions.pickPlacementFolder(instanceName, targetName, dashboardSelector);
+        await this.refresh();
+        return;
+      case "openPlacementBrowser":
+        if (!dashboardSelector || !instanceName || !targetName) {
+          throw new Error("Select a dashboard and deployment target to browse placement.");
+        }
+        await this.openPlacementBrowser(instanceName);
+        await this.refresh();
+        return;
+      case "placementNavigateUp":
+        if (!instanceName || !this.placementBrowserState) {
+          throw new Error("Placement browser is not active.");
+        }
+        await this.navigatePlacementBrowser(instanceName, this.placementBrowserState.currentChain.slice(0, -1));
+        await this.refresh();
+        return;
+      case "placementEnterFolder":
+        if (!instanceName || !this.placementBrowserState) {
+          throw new Error("Placement browser is not active.");
+        }
+        {
+          const payload = message.payload as { uid?: string; title?: string };
+          if (!payload?.uid || !payload?.title) {
+            throw new Error("Invalid placement folder selection.");
+          }
+          await this.navigatePlacementBrowser(instanceName, [
+            ...this.placementBrowserState.currentChain,
+            { uid: payload.uid, title: payload.title },
+          ]);
+        }
+        await this.refresh();
+        return;
+      case "placementConfirm":
+        if (this.placementBrowserState) {
+          this.placementBrowserState.inputPath = folderPathFromChain(this.placementBrowserState.currentChain) ?? "";
+          this.placementBrowserState.isOpen = false;
+        }
+        await this.refresh();
+        return;
+      case "placementCancel":
+        if (this.placementBrowserState) {
+          this.placementBrowserState.isOpen = false;
+          this.placementBrowserState.currentChain = [];
+          this.placementBrowserState.children = [];
+          this.placementBrowserState.browserError = undefined;
+        }
+        await this.refresh();
         return;
       case "pullSelected":
         await this.actions.pullSelected();

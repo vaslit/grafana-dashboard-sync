@@ -32,7 +32,6 @@ import {
   DashboardTreeProvider,
 } from "./ui/dashboardTreeProvider";
 import { DetailsViewProvider } from "./ui/detailsViewProvider";
-import { FolderPickerPanel } from "./ui/folderPickerPanel";
 import {
   DevTargetTreeItem,
   DeploymentTargetTreeItem,
@@ -260,7 +259,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
 
   let detailsProvider: DetailsViewProvider;
-  const folderPickerPanel = new FolderPickerPanel();
 
   const refreshAll = async (): Promise<void> => {
     await syncActiveInstance();
@@ -629,28 +627,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await refreshAll();
       void vscode.window.showInformationMessage(
         `Saved datasources for ${selectorName} on ${instanceName}.`,
-      );
-    },
-    pickPlacementFolder: async (instanceName: string, targetName: string, selectorName: string) => {
-      const service = requireService();
-      const record = await requireDashboardRecord(selectorName);
-      const placement = await service.buildPlacementDetails(instanceName, targetName, record.entry);
-      await folderPickerPanel.open(
-        {
-          instanceName,
-          targetName,
-          dashboardSelector: selectorName,
-          initialPath: placement.overrideFolderPath ?? placement.baseFolderPath,
-          baseFolderPath: placement.baseFolderPath,
-        },
-        {
-          listChildren: (parentUid?: string) => service.listFolderChildren(instanceName, parentUid),
-          createFolder: (parentUid: string | undefined, title: string) => service.createFolderInParent(instanceName, parentUid, title),
-          onConfirm: async (folderPath: string | undefined) => {
-            await service.savePlacement(instanceName, targetName, record.entry, folderPath);
-            await refreshAll();
-          },
-        },
       );
     },
     savePlacement: async (
@@ -1110,11 +1086,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         "",
       ),
     ),
-    vscode.commands.registerCommand("grafanaDashboards.pickPlacementFolder", async () => {
-      const target = await requireDeploymentTarget();
-      const record = await requireDashboardRecord();
-      await actionHandlers.pickPlacementFolder(target.instanceName, target.name, record.selectorName);
-    }),
     vscode.commands.registerCommand("grafanaDashboards.removeInstance", (item?: InstanceTreeItem) => removeInstance(item)),
     vscode.commands.registerCommand("grafanaDashboards.removeDeploymentTarget", (item?: DeploymentTargetTreeItem) =>
       removeDeploymentTarget(item),
