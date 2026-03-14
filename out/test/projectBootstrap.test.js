@@ -35,10 +35,13 @@ async function withTempWorkspace(run) {
         await strict_1.default.rejects(promises_1.default.stat(node_path_1.default.join(projectRoot, "instances")));
         strict_1.default.deepEqual(config.dashboards, []);
         strict_1.default.deepEqual(config.datasources, {});
+        strict_1.default.deepEqual(config.devTarget, {
+            instanceName: "example",
+            targetName: "default",
+        });
         strict_1.default.deepEqual(config.instances, {
             example: {
                 grafanaUrl: "http://localhost:3000",
-                grafanaNamespace: "default",
                 targets: {
                     default: {},
                 },

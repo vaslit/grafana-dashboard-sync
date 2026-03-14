@@ -133,6 +133,8 @@ Instance tokens are stored in VS Code Secret Storage. They are not written to wo
 
 ## Development
 
+Process guidance for team workflow is documented in [DEVELOPMENT_AND_DELIVERY.md](DEVELOPMENT_AND_DELIVERY.md).
+
 Prerequisites:
 
 - VS Code 1.88+
@@ -161,6 +163,8 @@ Test:
 ```bash
 npm test
 ```
+
+If the shell does not have `node`/`npm`, but VS Code is installed, see [LOCAL_BUILD.md](/home/vase/Projects/grafana-dashboard-sync/LOCAL_BUILD.md) for the fallback build and install flow using the Node runtime bundled with VS Code.
 
 Run the extension in a development host by opening this repository in VS Code and pressing `F5`.
 

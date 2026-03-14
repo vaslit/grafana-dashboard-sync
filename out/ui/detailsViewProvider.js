@@ -35,7 +35,6 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DetailsViewProvider = void 0;
 const vscode = __importStar(require("vscode"));
-const datasourceRefs_1 = require("../core/datasourceRefs");
 const projectLocator_1 = require("../core/projectLocator");
 function escapeHtml(value) {
     return value
@@ -63,22 +62,6 @@ function usageLabel(row) {
         }
     });
     return labels.length > 0 ? labels.join(" + ") : String(row.usageCount ?? 0);
-}
-function revisionLabel(revision) {
-    const timestamp = revision.record.createdAt.replace("T", " ").replace(/\.\d+Z$/, "Z");
-    return revision.isCheckedOut
-        ? `${revision.record.id} [current]`
-        : `${revision.record.id} (${timestamp}, ${revision.record.source.kind})`;
-}
-function liveStatusLabel(status) {
-    switch (status.state) {
-        case "matched":
-            return status.matchedRevisionId ?? "matched";
-        case "unversioned":
-            return "unversioned";
-        case "error":
-            return "error";
-    }
 }
 class DetailsViewProvider {
     getRepository;
@@ -133,15 +116,19 @@ class DetailsViewProvider {
         const detailsMode = this.selectionState.selectedDetailsMode ??
             (this.selectionState.selectedDashboardSelectorName ? "dashboard" : this.selectionState.selectedInstanceName ? "instance" : undefined);
         const manifestExists = await repository.manifestExists();
-        const dashboardInstanceName = detailsMode === "dashboard" ? this.selectionState.activeInstanceName : this.selectionState.selectedInstanceName;
-        const dashboardTargetName = detailsMode === "dashboard" ? this.selectionState.activeTargetName : this.selectionState.selectedTargetName;
+        const dashboardInstanceName = detailsMode === "dashboard"
+            ? this.selectionState.selectedInstanceName ?? this.selectionState.activeInstanceName
+            : this.selectionState.selectedInstanceName;
+        const dashboardTargetName = detailsMode === "dashboard"
+            ? this.selectionState.selectedTargetName ?? this.selectionState.activeTargetName
+            : this.selectionState.selectedTargetName;
         const dashboard = detailsMode === "dashboard" && this.selectionState.selectedDashboardSelectorName
             ? await repository.loadDashboardDetails(this.selectionState.selectedDashboardSelectorName)
             : undefined;
         const instance = dashboardInstanceName
             ? await repository.loadInstanceDetails(dashboardInstanceName)
             : undefined;
-        const target = detailsMode === "dashboard" && instance && dashboardTargetName
+        const target = instance && dashboardTargetName
             ? await repository.loadDeploymentTargetDetails(instance.instance.name, dashboardTargetName)
             : undefined;
         let datasourceOptions = [];
@@ -157,14 +144,14 @@ class DetailsViewProvider {
         const instanceDatasourceRows = detailsMode === "instance" && instance
             ? await this.buildInstanceDatasourceRows(instance.instance.name)
             : [];
-        const datasourceRows = dashboard && instance
-            ? await this.buildDatasourceRows(instance.instance.name, dashboard.entry, datasourceOptions)
+        const targetDashboardRows = detailsMode === "instance" && instance && this.selectionState.selectedTargetName
+            ? await service.buildTargetDashboardSummaryRows(instance.instance.name, this.selectionState.selectedTargetName).catch(() => [])
+            : [];
+        const datasourceRows = dashboard && instance && dashboardTargetName
+            ? await this.buildDatasourceRows(instance.instance.name, dashboardTargetName, dashboard.entry, datasourceOptions)
             : [];
         const overrideVariables = dashboard && instance && target
             ? await service.buildOverrideEditorVariables(instance.instance.name, target.target.name, dashboard.entry).catch(() => [])
-            : [];
-        const revisions = dashboard
-            ? await service.listDashboardRevisions(dashboard.entry).catch(() => [])
             : [];
         const liveTargetVersions = dashboard
             ? await service.listLiveTargetVersionStatuses(dashboard.entry).catch(() => [])
@@ -260,10 +247,10 @@ class DetailsViewProvider {
 <body>
   ${this.renderManifestSection(manifestExists)}
   ${detailsMode === "dashboard" ? this.renderDashboardSection(dashboard) : ""}
-  ${detailsMode === "dashboard" ? this.renderRevisionSection(dashboard, revisions, instance, target) : ""}
   ${detailsMode === "dashboard" ? this.renderLiveTargetVersionsSection(dashboard, liveTargetVersions) : ""}
   ${detailsMode === "instance" ? this.renderInstanceSection(instance, target) : ""}
   ${this.renderDatasourceSection(dashboard, instance, target, datasourceRows, datasourceOptions, datasourceLoadError, detailsMode, instanceDatasourceRows)}
+  ${detailsMode === "instance" ? this.renderTargetDashboardSection(instance, this.selectionState.selectedTargetName, targetDashboardRows) : ""}
   ${detailsMode === "dashboard" ? this.renderPlacementSection(dashboard, instance, target, placement) : ""}
   ${detailsMode === "dashboard" ? this.renderOverrideSection(dashboard, instance, target, overrideVariables) : ""}
   <script nonce="${scriptNonce}">
@@ -376,21 +363,6 @@ class DetailsViewProvider {
       });
     }
 
-    const revisionForm = document.getElementById("revision-form");
-    if (revisionForm) {
-      revisionForm.addEventListener("submit", (event) => {
-        event.preventDefault();
-        const payload = valuesFromForm(revisionForm);
-        const submitter = event.submitter;
-        const action = submitter && "dataset" in submitter ? submitter.dataset.revisionAction : undefined;
-        if (action === "checkoutRevision") {
-          vscode.postMessage({ type: "checkoutRevision", payload });
-        } else if (action === "deployRevision") {
-          vscode.postMessage({ type: "deployRevision", payload });
-        }
-      });
-    }
-
     const createInstanceForm = document.getElementById("create-instance-form");
     if (createInstanceForm) {
       createInstanceForm.addEventListener("submit", (event) => {
@@ -399,16 +371,20 @@ class DetailsViewProvider {
       });
     }
 
-    document.querySelectorAll("select[data-name-target]").forEach((select) => {
-      const syncName = () => {
+    document.querySelectorAll("select[data-target-uid-input]").forEach((select) => {
+      const syncDatasourceInputs = () => {
         const selectedOption = select.options[select.selectedIndex];
-        const hidden = document.getElementById(select.dataset.nameTarget);
-        if (hidden) {
-          hidden.value = selectedOption ? (selectedOption.dataset.datasourceName || "") : "";
+        const uidInput = document.getElementById(select.dataset.targetUidInput);
+        if (uidInput) {
+          uidInput.value = selectedOption ? selectedOption.value : "";
+        }
+        const nameInput = document.getElementById(select.dataset.targetNameInput);
+        if (nameInput) {
+          nameInput.value = selectedOption ? (selectedOption.dataset.datasourceName || "") : "";
         }
       };
-      select.addEventListener("change", syncName);
-      syncName();
+      select.addEventListener("change", syncDatasourceInputs);
+      syncDatasourceInputs();
     });
 
     document.querySelectorAll("input[data-override-toggle]").forEach((checkbox) => {
@@ -583,40 +559,6 @@ class DetailsViewProvider {
       </form>
     </section>`;
     }
-    renderRevisionSection(dashboard, revisions, instance, target) {
-        if (!dashboard) {
-            return "";
-        }
-        const current = revisions.find((revision) => revision.isCheckedOut);
-        const revisionOptions = revisions.length === 0
-            ? `<option value="">No revisions yet</option>`
-            : revisions
-                .map((revision) => {
-                const selected = revision.isCheckedOut ? ' selected="selected"' : "";
-                return `<option value="${escapeHtml(revision.record.id)}"${selected}>${escapeHtml(revisionLabel(revision))}</option>`;
-            })
-                .join("");
-        const targetHint = instance && target
-            ? `${instance.instance.name}/${target.target.name}`
-            : "Select a deployment target to deploy a revision.";
-        return `<section data-collapsible-section="revisions">
-      <h2>Revisions</h2>
-      <div class="hint">History for <strong>${escapeHtml(dashboard.selectorName)}</strong>.</div>
-      <div class="small">Current checked out revision: ${escapeHtml(current?.record.id ?? "(initializing)")}</div>
-      <div class="small">Active target: ${escapeHtml(targetHint)}</div>
-      <form id="revision-form" class="grid">
-        <label>
-          Revision
-          <select name="revisionId">
-            ${revisionOptions}
-          </select>
-        </label>
-        <div class="actions">
-          <button type="submit" data-revision-action="checkoutRevision">Checkout Selected Revision</button>
-        </div>
-      </form>
-    </section>`;
-    }
     renderLiveTargetVersionsSection(dashboard, statuses) {
         if (!dashboard) {
             return "";
@@ -629,19 +571,9 @@ class DetailsViewProvider {
         }
         const rows = statuses
             .map((status) => {
-            const payload = escapeHtml(JSON.stringify({
-                instanceName: status.instanceName,
-                targetName: status.targetName,
-            }));
             return `<div class="grid" style="padding: 8px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 6px;">
           <div><strong>${escapeHtml(`${status.instanceName}/${status.targetName}`)}</strong></div>
-          <div class="small">Live status: ${escapeHtml(liveStatusLabel(status))}</div>
-          <div class="small">Dashboard UID: ${escapeHtml(status.effectiveDashboardUid ?? "(unknown)")}</div>
           ${status.detail ? `<div class="small">Detail: ${escapeHtml(status.detail)}</div>` : ""}
-          <div class="actions">
-            <button type="button" class="secondary" data-command="useLiveTarget" data-payload="${payload}">Use Target</button>
-            <button type="button" class="secondary" data-command="pullLiveTarget" data-payload="${payload}">Pull From Target</button>
-          </div>
         </div>`;
         })
             .join("");
@@ -679,10 +611,6 @@ class DetailsViewProvider {
           GRAFANA_URL
           <input type="text" name="GRAFANA_URL" value="${escapeHtml(envValues.GRAFANA_URL ?? "")}" />
         </label>
-        <label>
-          GRAFANA_NAMESPACE
-          <input type="text" name="GRAFANA_NAMESPACE" value="${escapeHtml(envValues.GRAFANA_NAMESPACE ?? "")}" />
-        </label>
         <div class="small">Token: ${escapeHtml(instance.tokenConfigured ? `configured via ${instance.tokenSourceLabel ?? "Secret Storage"}` : "missing")}</div>
         <div class="small">Connection source: ${escapeHtml(instance.mergedConnection?.sourceLabel ?? "No valid connection yet")}</div>
         <div class="actions">
@@ -691,106 +619,51 @@ class DetailsViewProvider {
       </form>
     </section>`;
     }
-    async buildDatasourceRows(instanceName, entry, datasourceOptions = []) {
+    async buildDatasourceRows(instanceName, targetName, entry, datasourceOptions = []) {
         const repository = this.getRepository();
-        if (!repository || !entry) {
+        const service = this.getService();
+        if (!repository || !service || !entry) {
             return [];
         }
-        const descriptors = await repository
-            .readDashboardJson(entry)
-            .then((dashboard) => (0, datasourceRefs_1.buildDashboardDatasourceDescriptors)(dashboard))
-            .catch(() => []);
-        const datasourceCatalog = await repository.readDatasourceCatalog();
-        const rowMap = new Map();
-        const ensureRow = (sourceName, sourceLabel) => {
-            const existing = rowMap.get(sourceName);
-            if (existing) {
-                return existing;
-            }
-            const row = {
-                currentSourceName: sourceName,
-                sourceLabel,
-            };
-            rowMap.set(sourceName, row);
-            return row;
-        };
-        for (const descriptor of descriptors) {
-            const row = ensureRow(descriptor.sourceUid, descriptor.label);
-            row.sourceType = descriptor.type;
-            row.usageCount = descriptor.usageCount;
-            row.usageKinds = descriptor.usageKinds;
-            const target = datasourceCatalog.datasources[descriptor.sourceUid]?.instances[instanceName];
-            row.targetUid = target?.uid;
-            row.targetName = target?.name;
-        }
-        return [...rowMap.values()].sort((left, right) => left.sourceLabel.localeCompare(right.sourceLabel));
+        const rows = await service.buildTargetDatasourceRows(instanceName, targetName, entry).catch(() => []);
+        return rows.map((row) => ({
+            currentSourceName: row.datasourceKey,
+            sourceLabel: row.sourceLabel,
+            sourceType: row.sourceType,
+            usageCount: row.usageCount,
+            usageKinds: row.usageKinds,
+            globalDatasourceKey: row.globalDatasourceKey,
+            targetUid: row.targetUid,
+            targetName: row.targetName,
+        }));
     }
     async buildInstanceDatasourceRows(instanceName) {
-        const repository = this.getRepository();
-        if (!repository) {
+        const service = this.getService();
+        if (!service) {
             return [];
         }
-        const records = await repository.listDashboardRecords();
-        const datasourceCatalog = await repository.readDatasourceCatalog();
-        const rowMap = new Map();
-        for (const record of records) {
-            if (!record.exists) {
-                continue;
-            }
-            const dashboard = await repository.readDashboardJson(record.entry).catch(() => undefined);
-            if (!dashboard) {
-                continue;
-            }
-            const descriptors = (0, datasourceRefs_1.buildDashboardDatasourceDescriptors)(dashboard);
-            for (const descriptor of descriptors) {
-                const sourceName = descriptor.sourceUid;
-                const target = datasourceCatalog.datasources[sourceName]?.instances[instanceName];
-                const existing = rowMap.get(sourceName);
-                if (existing) {
-                    existing.usageCount += descriptor.usageCount;
-                    existing.sourceType ??= descriptor.type;
-                    for (const usageKind of descriptor.usageKinds) {
-                        if (!existing.usageKinds.includes(usageKind)) {
-                            existing.usageKinds.push(usageKind);
-                        }
-                    }
-                    if (!existing.dashboards.includes(record.selectorName)) {
-                        existing.dashboards.push(record.selectorName);
-                    }
-                    existing.targetUid ??= target?.uid;
-                    existing.targetName ??= target?.name;
-                    continue;
-                }
-                rowMap.set(sourceName, {
-                    sourceName,
-                    sourceType: descriptor.type,
-                    usageCount: descriptor.usageCount,
-                    usageKinds: [...descriptor.usageKinds],
-                    dashboards: [record.selectorName],
-                    targetUid: target?.uid,
-                    targetName: target?.name,
-                });
-            }
-        }
-        return [...rowMap.values()]
-            .map((row) => ({
-            ...row,
-            dashboards: [...row.dashboards].sort((left, right) => left.localeCompare(right)),
-            usageKinds: [...row.usageKinds].sort(),
-        }))
-            .sort((left, right) => left.sourceName.localeCompare(right.sourceName));
+        const rows = await service.buildGlobalDatasourceUsageRows(instanceName).catch(() => []);
+        return rows.map((row) => ({
+            globalDatasourceKey: row.globalDatasourceKey,
+            sourceType: row.sourceType,
+            dashboards: row.dashboards,
+            instanceUid: row.instanceUid,
+            instanceName: row.instanceName,
+        }));
     }
     renderDatasourceRows(rows, prefix, datasourceOptions) {
         return rows
             .map((row, index) => {
             const targetUid = row.targetUid;
             const targetName = row.targetName;
-            const hiddenNameId = `${prefix}-target-name-${index}`;
+            const helperSelectId = `${prefix}-target-helper-${index}`;
+            const targetUidInputId = `${prefix}-target-uid-${index}`;
+            const targetNameInputId = `${prefix}-target-name-${index}`;
             const normalizedTargetName = targetName ??
                 datasourceOptions.find((option) => option.uid === targetUid)?.name ??
                 "";
             const selectOptions = [
-                `<option value="">Select datasource</option>`,
+                `<option value="">Select datasource to autofill</option>`,
                 ...datasourceOptions.map((option) => {
                     const selected = option.uid === targetUid ? ' selected="selected"' : "";
                     return `<option value="${escapeHtml(option.uid)}" data-datasource-name="${escapeHtml(option.name)}"${selected}>${escapeHtml(optionLabel(option))}</option>`;
@@ -803,18 +676,43 @@ class DetailsViewProvider {
             ].join("");
             return `<div class="grid" style="padding: 8px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 6px;">
           <label>
-            Source Datasource
-            <input type="text" name="${prefix}_source_name__${index}" value="${escapeHtml(row.sourceLabel)}" />
+            Global Datasource Key
+            <input type="text" name="${prefix}_source_name__${index}" value="${escapeHtml(row.globalDatasourceKey)}" />
           </label>
           <input type="hidden" name="${prefix}_current_source_name__${index}" value="${escapeHtml(row.currentSourceName)}" />
+          <div class="small">Dashboard datasource: ${escapeHtml(row.sourceLabel)} (${escapeHtml(row.currentSourceName)})</div>
           <div class="small">Type: ${escapeHtml(row.sourceType ?? "-")}, used in: ${escapeHtml(usageLabel(row))}</div>
           <label>
-            Target Datasource
-            <select name="${prefix}_target_uid__${index}" data-name-target="${hiddenNameId}">
+            Resolved Instance Datasource
+            <select
+              id="${helperSelectId}"
+              data-target-uid-input="${targetUidInputId}"
+              data-target-name-input="${targetNameInputId}"
+            >
               ${selectOptions}
             </select>
           </label>
-          <input type="hidden" id="${hiddenNameId}" name="${prefix}_target_name__${index}" value="${escapeHtml(normalizedTargetName)}" />
+          <div class="small">Use the picker when Grafana is reachable, or enter datasource values manually below.</div>
+          <label>
+            Target Datasource Name
+            <input
+              id="${targetNameInputId}"
+              type="text"
+              name="${prefix}_target_name__${index}"
+              value="${escapeHtml(normalizedTargetName)}"
+              placeholder="Prometheus Prod"
+            />
+          </label>
+          <label>
+            Target Datasource UID
+            <input
+              id="${targetUidInputId}"
+              type="text"
+              name="${prefix}_target_uid__${index}"
+              value="${escapeHtml(targetUid ?? "")}"
+              placeholder="prometheus-prod-uid"
+            />
+          </label>
         </div>`;
         })
             .join("");
@@ -828,27 +726,29 @@ class DetailsViewProvider {
                 ? `<div class="hint">Could not load datasources from Grafana for <strong>${escapeHtml(instance.instance.name)}</strong>: ${escapeHtml(datasourceLoadError)}</div>`
                 : "";
             const rowsMarkup = instanceRows.length === 0
-                ? `<div class="hint">No tracked dashboard datasources are currently used for this instance.</div>`
+                ? `<div class="hint">Global datasource catalog is empty for this instance.</div>`
                 : instanceRows
                     .map((row) => {
-                    const mappedTarget = row.targetUid
-                        ? `${row.targetName ?? "(unknown)"} (${row.targetUid})`
+                    const mappedTarget = row.instanceUid
+                        ? `${row.instanceName ?? "(unknown)"} (${row.instanceUid})`
                         : "(not mapped)";
                     return `<div class="grid" style="padding: 8px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 6px;">
-                  <div><strong>${escapeHtml(row.sourceName)}</strong></div>
-                  <div class="small">Type: ${escapeHtml(row.sourceType ?? "-")}, used in: ${escapeHtml(row.usageKinds.join(" + "))}</div>
-                  <div class="small">Mapped target datasource: ${escapeHtml(mappedTarget)}</div>
+                  <div><strong>${escapeHtml(row.globalDatasourceKey)}</strong></div>
+                  <div class="small">Resolved instance datasource: ${escapeHtml(mappedTarget)}</div>
                   <div class="small">Dashboards: ${escapeHtml(row.dashboards.join(", "))}</div>
                 </div>`;
                 })
                     .join("");
             return `<section data-collapsible-section="datasources">
-        <h2>Datasources</h2>
-        <div class="hint">Datasources used by managed dashboards for <strong>${escapeHtml(instance.instance.name)}</strong>.</div>
-        <div class="small">Tracked datasource entries: ${escapeHtml(String(instanceRows.length))}</div>
+        <h2>Global Datasources</h2>
+        <div class="hint">Global datasource catalog for <strong>${escapeHtml(instance.instance.name)}</strong>.</div>
+        <div class="small">Tracked global datasource entries: ${escapeHtml(String(instanceRows.length))}</div>
         ${loadError}
         <div class="grid" style="margin-top: 8px;">
           ${rowsMarkup}
+        </div>
+        <div class="actions">
+          <button type="button" class="secondary" data-command="openDatasourceCatalog">Open Catalog</button>
         </div>
       </section>`;
         }
@@ -864,9 +764,10 @@ class DetailsViewProvider {
             : "";
         return `<section data-collapsible-section="datasources">
       <h2>Datasources</h2>
-      <div class="hint">Configure datasources for <strong>${escapeHtml(instance.instance.name)}/${escapeHtml(target.target.name)}</strong> and dashboard <strong>${escapeHtml(dashboard.selectorName)}</strong>.</div>
+      <div class="hint">Configure datasource bindings for <strong>${escapeHtml(instance.instance.name)}/${escapeHtml(target.target.name)}</strong> and dashboard <strong>${escapeHtml(dashboard.selectorName)}</strong>.</div>
       <div class="small">Dashboard: ${escapeHtml(dashboard.selectorName)}</div>
       <div class="small">Available datasources from Grafana: ${escapeHtml(String(datasourceOptions.length))}</div>
+      <div class="small">If the target is not reachable, enter datasource name and UID manually.</div>
       ${loadError}
       <form id="dashboard-datasource-form" class="grid" style="margin-top: 8px;">
         ${emptyState}
@@ -878,6 +779,34 @@ class DetailsViewProvider {
       </form>
     </section>`;
     }
+    renderTargetDashboardSection(instance, targetName, rows) {
+        if (!instance || !targetName) {
+            return "";
+        }
+        const content = rows.length === 0
+            ? `<div class="hint">No dashboards available for this target.</div>`
+            : rows
+                .map((row) => {
+                const liveText = row.liveStatus !== undefined
+                    ? `${row.liveStatus}${row.liveMatchedRevisionId ? ` (${row.liveMatchedRevisionId})` : ""}`
+                    : "not checked";
+                return `<div class="grid" style="padding: 8px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 6px;">
+                <div><strong>${escapeHtml(row.selectorName)}</strong></div>
+                <div class="small">Stored revision: ${escapeHtml(row.currentRevisionId ?? "(unset)")}</div>
+                <div class="small">UID / path: ${escapeHtml(row.effectiveDashboardUid ?? "(pending)")} / ${escapeHtml(row.effectiveFolderPath ?? "(root)")}</div>
+                <div class="small">Datasources: ${escapeHtml(row.datasourceStatus)}</div>
+                <div class="small">Live status: ${escapeHtml(liveText)}</div>
+              </div>`;
+            })
+                .join("");
+        return `<section data-collapsible-section="target-dashboards">
+      <h2>Target Dashboards</h2>
+      <div class="hint">Managed dashboards for <strong>${escapeHtml(instance.instance.name)}/${escapeHtml(targetName)}</strong>.</div>
+      <div class="grid" style="margin-top: 8px;">
+        ${content}
+      </div>
+    </section>`;
+    }
     renderPlacementSection(dashboard, instance, target, placement) {
         if (!dashboard || !instance || !target) {
             return "";
@@ -887,9 +816,9 @@ class DetailsViewProvider {
         const value = placement?.overrideFolderPath ?? placement?.baseFolderPath ?? "";
         return `<section data-collapsible-section="placement">
       <h2>Placement</h2>
-      <div class="hint">Configure server folder placement for <strong>${escapeHtml(instance.instance.name)}/${escapeHtml(target.target.name)}</strong>.</div>
+      <div class="hint">Configure target folder placement for <strong>${escapeHtml(instance.instance.name)}/${escapeHtml(target.target.name)}</strong>.</div>
       <div class="small">Base dashboard UID: ${escapeHtml(placement?.baseDashboardUid ?? dashboard.entry.uid)}</div>
-      <div class="small">Target dashboard UID: ${escapeHtml(placement?.overrideDashboardUid ?? (target.target.name === "default" ? "(not used for default)" : "(will be generated on deploy/pull)"))}</div>
+      <div class="small">Target dashboard UID: ${escapeHtml(placement?.overrideDashboardUid ?? (target.target.name === "default" ? "(not used for default)" : "(will be generated)"))}</div>
       <div class="small">Effective dashboard UID: ${escapeHtml(placement?.effectiveDashboardUid ?? (target.target.name === "default" ? dashboard.entry.uid : "(pending generation)"))}</div>
       <div class="small">Base folder path: ${escapeHtml(placement?.baseFolderPath ?? "(root)")}</div>
       <form id="placement-form" class="grid">
@@ -985,8 +914,8 @@ class DetailsViewProvider {
     }
     async handleMessage(message) {
         const dashboardSelector = this.selectionState.selectedDashboardSelectorName;
-        const instanceName = this.selectionState.selectedInstanceName;
-        const targetName = this.selectionState.selectedTargetName;
+        const instanceName = this.selectionState.selectedInstanceName ?? this.selectionState.activeInstanceName;
+        const targetName = this.selectionState.selectedTargetName ?? this.selectionState.activeTargetName;
         switch (message.type) {
             case "initializeProject":
                 await this.actions.initializeProject();
@@ -1026,7 +955,7 @@ class DetailsViewProvider {
                 if (!instanceName || !targetName || !dashboardSelector) {
                     throw new Error("Select a dashboard and deployment target to save datasource mappings.");
                 }
-                await this.actions.saveDashboardDatasourceMappings(instanceName, dashboardSelector, message.payload);
+                await this.actions.saveDashboardDatasourceMappings(instanceName, targetName, dashboardSelector, message.payload);
                 return;
             case "removeInstance":
                 await this.actions.removeInstance();
@@ -1052,43 +981,12 @@ class DetailsViewProvider {
                 }
                 await this.actions.createRevision(dashboardSelector);
                 return;
-            case "checkoutRevision":
-                if (!dashboardSelector) {
-                    throw new Error("No dashboard selected.");
-                }
-                await this.actions.checkoutRevision(dashboardSelector, message.payload?.revisionId ?? "");
-                return;
-            case "deployRevision":
-                if (!dashboardSelector || !instanceName || !targetName) {
-                    throw new Error("Select a dashboard and deployment target to deploy a revision.");
-                }
-                await this.actions.deployRevision(dashboardSelector, message.payload?.revisionId ?? "", instanceName, targetName);
-                return;
             case "deployLatestRevision":
                 if (!dashboardSelector || !instanceName || !targetName) {
                     throw new Error("Select a dashboard and deployment target to deploy the latest revision.");
                 }
                 await this.actions.deployLatestRevision(dashboardSelector, instanceName, targetName);
                 return;
-            case "useLiveTarget": {
-                const payload = message.payload;
-                if (!payload?.instanceName || !payload?.targetName) {
-                    throw new Error("Live target payload is invalid.");
-                }
-                await this.actions.setActiveTarget(payload.instanceName, payload.targetName);
-                return;
-            }
-            case "pullLiveTarget": {
-                if (!dashboardSelector) {
-                    throw new Error("No dashboard selected.");
-                }
-                const payload = message.payload;
-                if (!payload?.instanceName || !payload?.targetName) {
-                    throw new Error("Live target payload is invalid.");
-                }
-                await this.actions.pullTarget(dashboardSelector, payload.instanceName, payload.targetName);
-                return;
-            }
             case "savePlacement":
                 if (!dashboardSelector || !instanceName || !targetName) {
                     throw new Error("Select a dashboard and deployment target to save placement.");

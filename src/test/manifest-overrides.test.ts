@@ -75,10 +75,38 @@ test("generateOverrideFileFromDashboard extracts supported variable types", () =
 
   const overrideFile = generateOverrideFileFromDashboard(dashboard);
   assert.deepEqual(overrideFile, {
-    variables: {
+    variableOverrides: {
       freeText: "abc",
       site: "nsk",
     },
+    datasourceBindings: {},
+  });
+});
+
+test("generateOverrideFileFromDashboard prefers constant query over stale current value", () => {
+  const dashboard = {
+    title: "Demo",
+    templating: {
+      list: [
+        {
+          name: "siteConst",
+          type: "constant",
+          current: {
+            text: "LUZ",
+            value: "LUZ",
+          },
+          query: "LUZ1",
+        },
+      ],
+    },
+  } as Record<string, unknown>;
+
+  const overrideFile = generateOverrideFileFromDashboard(dashboard);
+  assert.deepEqual(overrideFile, {
+    variableOverrides: {
+      siteConst: "LUZ1",
+    },
+    datasourceBindings: {},
   });
 });
 
@@ -131,11 +159,12 @@ test("applyOverridesToDashboard rewrites current values for supported variables"
   const rendered = applyOverridesToDashboard(
     dashboard,
     {
-      variables: {
+      variableOverrides: {
         site: "nsk",
         freeText: "new text",
         siteConst: "RND",
       },
+      datasourceBindings: {},
     },
   );
 
@@ -181,9 +210,10 @@ test("applyOverridesToDashboard rejects custom override values that are not in t
   assert.throws(
     () =>
       applyOverridesToDashboard(dashboard, {
-        variables: {
+        variableOverrides: {
           site: "LUZ",
         },
+        datasourceBindings: {},
       }),
     /is not available in custom variable "site"/,
   );

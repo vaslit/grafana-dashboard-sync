@@ -82,12 +82,13 @@ function extractSupportedVariables(dashboard, savedOverride) {
         .map((item) => {
         const current = (item.current ?? {});
         const name = item.name;
+        const constantQuery = item.type === "constant" && typeof item.query === "string" ? item.query : undefined;
         return {
             name,
             type: item.type,
-            currentText: current.text ?? "",
-            currentValue: current.value ?? "",
-            savedOverride: savedOverride?.variables[name],
+            currentText: constantQuery ?? current.text ?? "",
+            currentValue: constantQuery ?? current.value ?? "",
+            savedOverride: savedOverride?.variableOverrides[name],
             ...(item.type === "custom" ? { overrideOptions: normalizeCustomVariableOptions(item) } : {}),
         };
     });
@@ -123,14 +124,17 @@ function normalizeCurrentForStorage(current) {
     };
 }
 function generateOverrideFileFromDashboard(dashboard) {
-    const variables = Object.fromEntries(extractSupportedVariables(dashboard).map((descriptor) => [
+    const variableOverrides = Object.fromEntries(extractSupportedVariables(dashboard).map((descriptor) => [
         descriptor.name,
         normalizeCurrentForStorage({
             text: descriptor.currentText,
             value: descriptor.currentValue,
         }),
     ]));
-    return { variables };
+    return {
+        variableOverrides,
+        datasourceBindings: {},
+    };
 }
 function selectOptions(options, normalizedOverride) {
     if (!Array.isArray(options)) {
@@ -174,7 +178,7 @@ function validateCustomOverrideValue(variable, normalizedOverride) {
     }
 }
 function applyOverridesToDashboard(dashboard, overrideFile) {
-    if (Object.keys(overrideFile?.variables ?? {}).length === 0) {
+    if (Object.keys(overrideFile?.variableOverrides ?? {}).length === 0) {
         return structuredClone(dashboard);
     }
     const nextDashboard = structuredClone(dashboard);
@@ -192,7 +196,7 @@ function applyOverridesToDashboard(dashboard, overrideFile) {
             if (typeof name !== "string" || typeof type !== "string" || !SUPPORTED_VARIABLE_TYPES.has(type)) {
                 return variable;
             }
-            const overrideValue = overrideFile?.variables[name];
+            const overrideValue = overrideFile?.variableOverrides[name];
             if (overrideValue === undefined) {
                 return variable;
             }

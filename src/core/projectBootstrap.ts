@@ -34,19 +34,22 @@ export async function initializeProjectDirectory(
   const repository = new ProjectRepository(defaultProjectLayout(projectRootPath, workspaceRootPath));
   await repository.ensureProjectLayout();
   const config: WorkspaceProjectConfig = {
-    version: 2,
+    version: 4,
     layout: {
       dashboardsDir: "dashboards",
       backupsDir: "backups",
       rendersDir: "renders",
       maxBackups: repository.maxBackups,
     },
+    devTarget: {
+      instanceName: initialInstanceName.trim(),
+      targetName: "default",
+    },
     dashboards: [],
     datasources: {},
     instances: {
       [initialInstanceName.trim()]: {
         grafanaUrl: "http://localhost:3000",
-        grafanaNamespace: "default",
         targets: {
           default: {},
         },

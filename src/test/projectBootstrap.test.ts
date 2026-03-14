@@ -33,10 +33,13 @@ test("initializeProjectDirectory creates marker file, layout and first instance"
     await assert.rejects(fs.stat(path.join(projectRoot, "instances")));
     assert.deepEqual(config.dashboards, []);
     assert.deepEqual(config.datasources, {});
+    assert.deepEqual(config.devTarget, {
+      instanceName: "example",
+      targetName: "default",
+    });
     assert.deepEqual(config.instances, {
       example: {
         grafanaUrl: "http://localhost:3000",
-        grafanaNamespace: "default",
         targets: {
           default: {},
         },

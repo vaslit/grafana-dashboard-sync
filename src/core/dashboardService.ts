@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { URL } from "node:url";
 
 import { buildManifestEntriesFromRemoteDashboards } from "./dashboardCatalog";
 import {
@@ -31,15 +32,17 @@ import {
   BackupRestoreSelection,
   BackupScope,
   DashboardManifestEntry,
-  DashboardOverrideFile,
   DashboardOverrideValue,
   DashboardRevisionListItem,
   DashboardRevisionRecord,
   DashboardRevisionSnapshot,
+  DashboardTargetRevisionState,
+  DashboardTargetState,
   DashboardVersionIndex,
   DatasourceCatalogFile,
   DeploymentTargetRecord,
   DeploySummary,
+  GlobalDatasourceUsageRow,
   RenderManifest,
   RenderManifestDashboardRecord,
   RenderScope,
@@ -55,10 +58,13 @@ import {
   PullFileResult,
   PullSummary,
   RestoreSummary,
+  TargetDashboardSummaryRow,
+  TargetDatasourceBindingRow,
 } from "./types";
 import { GrafanaClient } from "./grafanaClient";
 
 interface PlacementDetails {
+  currentRevisionId?: string;
   baseFolderPath?: string;
   overrideFolderPath?: string;
   effectiveFolderPath?: string;
@@ -76,6 +82,13 @@ interface BackupCaptureTargetSpec {
 interface DashboardComparableSnapshot {
   dashboard: Record<string, unknown>;
   folderPath?: string;
+}
+
+interface TargetRevisionState {
+  targetState: DashboardTargetState;
+  revisionState: DashboardTargetRevisionState;
+  revision: DashboardRevisionRecord;
+  snapshot: DashboardRevisionSnapshot;
 }
 
 function sanitizeDashboardForStorage(dashboard: Record<string, unknown>): Record<string, unknown> {
@@ -191,13 +204,33 @@ export class DashboardService {
     return target;
   }
 
+  private variableDefaultsFromDashboard(dashboard: Record<string, unknown>): Record<string, DashboardOverrideValue> {
+    return Object.fromEntries(
+      extractSupportedVariables(dashboard).map((descriptor) => [
+        descriptor.name,
+        normalizeCurrentForStorage({
+          text: descriptor.currentText,
+          value: descriptor.currentValue,
+        }),
+      ]),
+    ) as Record<string, DashboardOverrideValue>;
+  }
+
+  private datasourceBindingDefaults(dashboard: Record<string, unknown>): Record<string, string> {
+    return Object.fromEntries(
+      extractDashboardDatasourceRefs(dashboard).map((ref) => [ref.sourceUid, ref.sourceUid]),
+    );
+  }
+
   private async managedVariableNames(entry: DashboardManifestEntry): Promise<Set<string>> {
     const overrides = await this.repository.readDashboardOverrides(entry);
     const targets = overrides?.dashboards[entry.uid]?.targets ?? {};
     const managed = new Set<string>();
     for (const override of Object.values(targets)) {
-      for (const variableName of Object.keys(override.variables ?? {})) {
-        managed.add(variableName);
+      for (const revisionState of Object.values(override.revisionStates ?? {})) {
+        for (const variableName of Object.keys(revisionState.variableOverrides ?? {})) {
+          managed.add(variableName);
+        }
       }
     }
     return managed;
@@ -252,12 +285,183 @@ export class DashboardService {
   ): { contentHash: string; templateHash: string } {
     const contentHash = hashValue({
       dashboard: snapshot.dashboard,
-      ...(snapshot.folderPath ? { folderPath: snapshot.folderPath } : {}),
     });
     const templateHash = hashValue(
       this.normalizeDashboardForVersionComparison(snapshot.dashboard, managedVariableNames, entry.uid),
     );
     return { contentHash, templateHash };
+  }
+
+  private async revisionById(
+    entry: DashboardManifestEntry,
+    revisionIdValue: string,
+  ): Promise<DashboardRevisionRecord | undefined> {
+    const index = await this.ensureDashboardVersionIndex(entry);
+    return index.revisions.find((candidate) => candidate.id === revisionIdValue);
+  }
+
+  private async ensureTargetState(
+    entry: DashboardManifestEntry,
+    instanceName: string,
+    targetName: string,
+    sourceRepository: ProjectRepository = this.repository,
+  ): Promise<DashboardTargetState> {
+    const existingState = await sourceRepository.readTargetOverrideFile(instanceName, targetName, entry);
+    const existingIndex = await this.repository.readDashboardVersionIndex(entry);
+    const checkedOutRevision =
+      existingIndex?.revisions.find((candidate) => candidate.id === existingIndex.checkedOutRevisionId) ??
+      existingIndex?.revisions[0] ??
+      (await this.currentCheckedOutRevision(entry)) ??
+      (await this.ensureWorkingCopyCheckedOutRevision(entry, { kind: "migration" }));
+    const revision = existingState?.currentRevisionId
+      ? (await this.revisionById(entry, existingState.currentRevisionId)) ?? checkedOutRevision
+      : checkedOutRevision;
+    if (!revision) {
+      throw new Error(`Could not resolve revision for ${selectorNameForEntry(entry)}.`);
+    }
+
+    const snapshot = await this.repository.readDashboardRevisionSnapshot(entry, revision.id);
+    if (!snapshot) {
+      throw new Error(`Revision snapshot not found: ${revision.id}`);
+    }
+
+    const folderMeta = await sourceRepository.readFolderMetadata(entry);
+    const nextState: DashboardTargetState = {
+      ...(existingState?.currentRevisionId ? { currentRevisionId: existingState.currentRevisionId } : { currentRevisionId: revision.id }),
+      ...(existingState?.dashboardUid ? { dashboardUid: existingState.dashboardUid } : {}),
+      ...(normalizeFolderPath(existingState?.folderPath ?? folderMeta?.path ?? snapshot.folderPath)
+        ? { folderPath: normalizeFolderPath(existingState?.folderPath ?? folderMeta?.path ?? snapshot.folderPath) }
+        : {}),
+      revisionStates: {
+        ...(existingState?.revisionStates ?? {}),
+      },
+    };
+
+    if (!isDefaultTarget(targetName) && !nextState.dashboardUid) {
+      nextState.dashboardUid = randomUUID();
+    }
+    if (isDefaultTarget(targetName)) {
+      delete nextState.dashboardUid;
+    }
+
+    if (stableJsonStringify(nextState) !== stableJsonStringify(existingState ?? {})) {
+      await sourceRepository.saveTargetOverrideFile(instanceName, targetName, entry, nextState);
+    }
+
+    return nextState;
+  }
+
+  private buildRevisionState(
+    dashboard: Record<string, unknown>,
+    inherited?: DashboardTargetRevisionState,
+  ): DashboardTargetRevisionState {
+    const variableDefaults = this.variableDefaultsFromDashboard(dashboard);
+    const datasourceDefaults = this.datasourceBindingDefaults(dashboard);
+    return {
+      variableOverrides: Object.fromEntries(
+        Object.keys(variableDefaults)
+          .filter((variableName) => inherited?.variableOverrides?.[variableName] !== undefined)
+          .map((variableName) => [variableName, inherited!.variableOverrides[variableName]!]),
+      ) as Record<string, DashboardOverrideValue>,
+      datasourceBindings: Object.fromEntries(
+        Object.keys(datasourceDefaults).map((datasourceKey) => [
+          datasourceKey,
+          inherited?.datasourceBindings?.[datasourceKey] ?? datasourceKey,
+        ]),
+      ),
+    };
+  }
+
+  private async ensureRevisionState(
+    entry: DashboardManifestEntry,
+    targetState: DashboardTargetState,
+    revisionIdValue: string,
+    inherited?: DashboardTargetRevisionState,
+  ): Promise<DashboardTargetRevisionState> {
+    const existing = targetState.revisionStates[revisionIdValue];
+    if (existing) {
+      return existing;
+    }
+
+    const snapshot = await this.repository.readDashboardRevisionSnapshot(entry, revisionIdValue);
+    if (!snapshot) {
+      throw new Error(`Revision snapshot not found: ${revisionIdValue}`);
+    }
+
+    const nextState = this.buildRevisionState(snapshot.dashboard, inherited);
+    targetState.revisionStates[revisionIdValue] = nextState;
+    return nextState;
+  }
+
+  private async targetRevisionState(
+    entry: DashboardManifestEntry,
+    instanceName: string,
+    targetName: string,
+    sourceRepository: ProjectRepository = this.repository,
+  ): Promise<TargetRevisionState> {
+    const state = await this.ensureTargetState(entry, instanceName, targetName, sourceRepository);
+    const revisionIdValue = state.currentRevisionId;
+    if (!revisionIdValue) {
+      throw new Error(`Current revision is not set for ${selectorNameForEntry(entry)} on ${instanceName}/${targetName}.`);
+    }
+    const revision = await this.revisionById(entry, revisionIdValue);
+    if (!revision) {
+      throw new Error(`Revision not found: ${revisionIdValue}`);
+    }
+    const snapshot = await this.repository.readDashboardRevisionSnapshot(entry, revision.id);
+    if (!snapshot) {
+      throw new Error(`Revision snapshot not found: ${revision.id}`);
+    }
+    const revisionState = await this.ensureRevisionState(entry, state, revision.id);
+    await this.repository.saveTargetOverrideFile(instanceName, targetName, entry, state);
+    return {
+      targetState: state,
+      revisionState,
+      revision,
+      snapshot,
+    };
+  }
+
+  private renameDatasourceBindings(
+    dashboard: Record<string, unknown>,
+    datasourceBindings: Record<string, string>,
+  ): Record<string, unknown> {
+    const renamePairs = Object.fromEntries(
+      Object.entries(datasourceBindings).filter(([sourceName, targetSourceName]) => sourceName !== targetSourceName),
+    );
+    return renameDatasourceSourceNames(dashboard, renamePairs);
+  }
+
+  private async updateTargetRevision(
+    entry: DashboardManifestEntry,
+    instanceName: string,
+    targetName: string,
+    revisionIdValue: string,
+    extras?: Partial<DashboardTargetState>,
+  ): Promise<DashboardTargetState> {
+    const state = await this.ensureTargetState(entry, instanceName, targetName);
+    const inheritedRevisionState =
+      state.currentRevisionId ? state.revisionStates[state.currentRevisionId] : undefined;
+    await this.ensureRevisionState(entry, state, revisionIdValue, inheritedRevisionState);
+    const nextState: DashboardTargetState = {
+      ...state,
+      currentRevisionId: revisionIdValue,
+      ...(extras?.folderPath !== undefined ? { folderPath: extras.folderPath } : {}),
+      ...(extras?.dashboardUid !== undefined ? { dashboardUid: extras.dashboardUid } : {}),
+      ...(extras?.revisionStates ? { revisionStates: extras.revisionStates } : {}),
+    };
+    await this.repository.saveTargetOverrideFile(instanceName, targetName, entry, nextState);
+    return nextState;
+  }
+
+  private async assertPullTargetIsDevTarget(instanceName: string, targetName: string): Promise<void> {
+    const devTarget = await this.repository.getDevTarget();
+    if (!devTarget) {
+      throw new Error("Dev target is not configured. Use Select Dev Target first.");
+    }
+    if (devTarget.instanceName !== instanceName || devTarget.targetName !== targetName) {
+      throw new Error(`Pull is allowed only from dev target ${devTarget.instanceName}/${devTarget.targetName}.`);
+    }
   }
 
   private async repositoryRevisionSnapshot(
@@ -313,13 +517,42 @@ export class DashboardService {
     return index.revisions.find((revision) => revision[field] === hash);
   }
 
+  private async findRevisionByNormalizedTemplateHash(
+    entry: DashboardManifestEntry,
+    templateHash: string,
+    managedVariableNames: ReadonlySet<string>,
+    revisions?: DashboardRevisionRecord[],
+  ): Promise<DashboardRevisionRecord | undefined> {
+    const candidates = revisions ?? (await this.ensureDashboardVersionIndex(entry)).revisions;
+    for (const revision of candidates) {
+      const snapshot = await this.repository.readDashboardRevisionSnapshot(entry, revision.id);
+      if (!snapshot) {
+        continue;
+      }
+      const candidateHash = hashValue(
+        this.normalizeDashboardForVersionComparison(snapshot.dashboard, managedVariableNames, entry.uid),
+      );
+      if (candidateHash === templateHash) {
+        return revision;
+      }
+    }
+    return undefined;
+  }
+
   private async createOrReuseRevision(
     entry: DashboardManifestEntry,
     snapshot: DashboardRevisionSnapshot,
     source: DashboardRevisionRecord["source"],
     options?: { checkout?: boolean },
   ): Promise<DashboardRevisionRecord> {
-    const index = await this.ensureDashboardVersionIndex(entry);
+    const existingIndex = await this.repository.readDashboardVersionIndex(entry);
+    const index =
+      existingIndex ??
+      ((await this.repository.dashboardExists(entry))
+        ? await this.ensureDashboardVersionIndex(entry)
+        : {
+            revisions: [],
+          });
     const managedVariableNames = await this.managedVariableNames(entry);
     const { contentHash, templateHash } = this.revisionHashes(entry, snapshot, managedVariableNames);
     const existing = index.revisions.find((revision) => revision.contentHash === contentHash);
@@ -352,24 +585,79 @@ export class DashboardService {
     return record;
   }
 
+  private async createOrUpdatePulledRevision(
+    entry: DashboardManifestEntry,
+    snapshot: DashboardRevisionSnapshot,
+    source: DashboardRevisionRecord["source"],
+    options?: { checkout?: boolean },
+  ): Promise<DashboardRevisionRecord> {
+    const existingIndex = await this.repository.readDashboardVersionIndex(entry);
+    const index =
+      existingIndex ??
+      ((await this.repository.dashboardExists(entry))
+        ? await this.ensureDashboardVersionIndex(entry)
+        : {
+            revisions: [],
+          });
+    const managedVariableNames = await this.managedVariableNames(entry);
+    const { contentHash, templateHash } = this.revisionHashes(entry, snapshot, managedVariableNames);
+    const exact = index.revisions.find((revision) => revision.contentHash === contentHash);
+    if (exact) {
+      if (options?.checkout && index.checkedOutRevisionId !== exact.id) {
+        await this.repository.saveDashboardVersionIndex(entry, {
+          ...index,
+          checkedOutRevisionId: exact.id,
+        });
+      }
+      return exact;
+    }
+
+    const equivalent = await this.findRevisionByNormalizedTemplateHash(
+      entry,
+      templateHash,
+      managedVariableNames,
+      index.revisions,
+    );
+    if (!equivalent) {
+      return this.createOrReuseRevision(entry, snapshot, source, options);
+    }
+
+    await this.repository.saveDashboardRevisionSnapshot(entry, equivalent.id, snapshot);
+    const nextRecord: DashboardRevisionRecord = {
+      ...equivalent,
+      contentHash,
+      templateHash,
+      ...(snapshot.folderPath ? { baseFolderPath: snapshot.folderPath } : {}),
+      source,
+    };
+    const nextIndex: DashboardVersionIndex = {
+      checkedOutRevisionId: options?.checkout ? equivalent.id : index.checkedOutRevisionId,
+      revisions: index.revisions.map((revision) => (revision.id === equivalent.id ? nextRecord : revision)),
+    };
+    await this.repository.saveDashboardVersionIndex(entry, nextIndex);
+    return nextRecord;
+  }
+
   private async checkoutRevisionSnapshot(
     entry: DashboardManifestEntry,
     revision: DashboardRevisionRecord,
     snapshot: DashboardRevisionSnapshot,
-    options?: { folderUid?: string },
+    options?: { folderUid?: string; folderPath?: string; updateFolderMeta?: boolean },
   ): Promise<void> {
     await this.repository.saveDashboardJson(entry, snapshot.dashboard);
-    const existingFolderMeta = await this.repository.readFolderMetadata(entry);
-    const normalizedPath = normalizeFolderPath(snapshot.folderPath);
-    const preservedUid = normalizedPath && existingFolderMeta?.path === normalizedPath ? existingFolderMeta.uid : undefined;
-    const nextFolderUid = options?.folderUid ?? preservedUid;
-    if (!normalizedPath && !nextFolderUid) {
-      await this.repository.deleteFolderMetadata(entry);
-    } else {
-      await this.repository.saveFolderMetadata(entry, {
-        ...(normalizedPath ? { path: normalizedPath } : {}),
-        ...(nextFolderUid ? { uid: nextFolderUid } : {}),
-      });
+    if (options?.updateFolderMeta) {
+      const existingFolderMeta = await this.repository.readFolderMetadata(entry);
+      const normalizedPath = normalizeFolderPath(options.folderPath ?? snapshot.folderPath);
+      const preservedUid = normalizedPath && existingFolderMeta?.path === normalizedPath ? existingFolderMeta.uid : undefined;
+      const nextFolderUid = options.folderUid ?? preservedUid;
+      if (!normalizedPath && !nextFolderUid) {
+        await this.repository.deleteFolderMetadata(entry);
+      } else {
+        await this.repository.saveFolderMetadata(entry, {
+          ...(normalizedPath ? { path: normalizedPath } : {}),
+          ...(nextFolderUid ? { uid: nextFolderUid } : {}),
+        });
+      }
     }
     const index = await this.ensureDashboardVersionIndex(entry);
     if (index.checkedOutRevisionId !== revision.id) {
@@ -433,25 +721,33 @@ export class DashboardService {
     targetName: string,
   ): Promise<{ snapshot: DashboardComparableSnapshot; effectiveDashboardUid?: string }> {
     const client = await this.clientFactory(instanceName);
-    const overrideFile = await this.materializeDashboardUidForTarget(this.repository, instanceName, targetName, entry);
-    const effectiveDashboardUid = this.effectiveDashboardUidForTarget(entry, targetName, overrideFile);
+    const targetRevision = await this.targetRevisionState(entry, instanceName, targetName);
+    const effectiveDashboardUid = this.effectiveDashboardUidForTarget(entry, targetName, targetRevision.targetState);
     if (!effectiveDashboardUid) {
       throw new Error(`Dashboard UID is not materialized for ${selectorNameForEntry(entry)} on ${instanceName}/${targetName}.`);
     }
 
     const response = await client.getDashboardByUid(effectiveDashboardUid);
     const catalog = await this.repository.readDatasourceCatalog();
-    const normalizedDashboard = normalizeDashboardDatasourceRefsFromCatalog(
+    const normalizedDashboard = this.renameDatasourceBindings(
       {
-        ...sanitizeDashboardForStorage(response.dashboard),
-        uid: entry.uid,
+        ...normalizeDashboardDatasourceRefsFromCatalog(
+          {
+            ...sanitizeDashboardForStorage(response.dashboard),
+            uid: entry.uid,
+          },
+          catalog,
+          instanceName,
+        ),
       },
-      catalog,
-      instanceName,
+      targetRevision.revisionState.datasourceBindings,
     );
     return {
       snapshot: {
         dashboard: normalizedDashboard,
+        ...(normalizeFolderPath(targetRevision.targetState.folderPath)
+          ? { folderPath: normalizeFolderPath(targetRevision.targetState.folderPath) }
+          : {}),
       },
       effectiveDashboardUid,
     };
@@ -464,6 +760,18 @@ export class DashboardService {
     const statuses = await Promise.all(
       targets.map(async (target) => {
         try {
+          const targetRevision = await this.targetRevisionState(entry, target.instanceName, target.name);
+          const datasourceCatalog = await this.repository.readDatasourceCatalog();
+          const missingMappings = targetRevision.snapshot
+            ? findMissingDatasourceMappings(
+                this.renameDatasourceBindings(
+                  targetRevision.snapshot.dashboard,
+                  targetRevision.revisionState.datasourceBindings,
+                ),
+                datasourceCatalog,
+                target.instanceName,
+              )
+            : [];
           const { snapshot, effectiveDashboardUid } = await this.liveTargetComparableSnapshot(
             entry,
             target.instanceName,
@@ -472,13 +780,28 @@ export class DashboardService {
           const templateHash = hashValue(
             this.normalizeDashboardForVersionComparison(snapshot.dashboard, managedVariableNames, entry.uid),
           );
-          const matched = index.revisions.find((revision) => revision.templateHash === templateHash);
+          const matched = await this.findRevisionByNormalizedTemplateHash(
+            entry,
+            templateHash,
+            managedVariableNames,
+            index.revisions,
+          );
           return {
             instanceName: target.instanceName,
             targetName: target.name,
+            storedRevisionId: targetRevision.targetState.currentRevisionId,
             effectiveDashboardUid,
+            ...(normalizeFolderPath(targetRevision.targetState.folderPath)
+              ? { effectiveFolderPath: normalizeFolderPath(targetRevision.targetState.folderPath) }
+              : {}),
             matchedRevisionId: matched?.id,
-            state: matched ? "matched" : "unversioned",
+            datasourceStatus: missingMappings.length > 0 ? "missing" : "complete",
+            state:
+              !matched
+                ? "unversioned"
+                : matched.id === targetRevision.targetState.currentRevisionId
+                  ? "matched"
+                  : "diverged",
           } as LiveTargetVersionStatus;
         } catch (error) {
           return {
@@ -501,13 +824,12 @@ export class DashboardService {
     instanceName: string,
     targetName: string,
   ): Promise<string | undefined> {
-    const index = await this.ensureDashboardVersionIndex(entry);
     const managedVariableNames = await this.managedVariableNames(entry);
     const { snapshot } = await this.liveTargetComparableSnapshot(entry, instanceName, targetName);
     const templateHash = hashValue(
       this.normalizeDashboardForVersionComparison(snapshot.dashboard, managedVariableNames, entry.uid),
     );
-    return index.revisions.find((revision) => revision.templateHash === templateHash)?.id;
+    return (await this.findRevisionByNormalizedTemplateHash(entry, templateHash, managedVariableNames))?.id;
   }
 
   private async rawTargetBackupItems(
@@ -520,8 +842,8 @@ export class DashboardService {
     const items: Array<BackupDashboardRecord & { dashboard: Record<string, unknown> }> = [];
 
     for (const entry of entries) {
-      const overrideFile = await this.materializeDashboardUidForTarget(this.repository, instanceName, targetName, entry);
-      const effectiveDashboardUid = this.effectiveDashboardUidForTarget(entry, targetName, overrideFile);
+      const state = await this.ensureTargetState(entry, instanceName, targetName);
+      const effectiveDashboardUid = this.effectiveDashboardUidForTarget(entry, targetName, state);
       if (!effectiveDashboardUid) {
         throw new Error(`Dashboard UID is not materialized for ${selectorNameForEntry(entry)} on ${instanceName}/${targetName}.`);
       }
@@ -612,22 +934,6 @@ export class DashboardService {
     );
   }
 
-  private async desiredFolderPathForSnapshot(
-    sourceRepository: ProjectRepository,
-    entry: DashboardManifestEntry,
-    instanceName: string,
-    targetName: string,
-    snapshotFolderPath?: string,
-  ): Promise<string | undefined> {
-    const overrideFile = await sourceRepository.readTargetOverrideFile(instanceName, targetName, entry);
-    const relativeFolder = path.dirname(entry.path).replace(/\\/g, "/");
-    return (
-      normalizeFolderPath(overrideFile?.folderPath) ??
-      normalizeFolderPath(snapshotFolderPath) ??
-      (relativeFolder && relativeFolder !== "_root" ? normalizeFolderPath(path.basename(relativeFolder)) : undefined)
-    );
-  }
-
   async renderDashboards(
     entries: DashboardManifestEntry[],
     instanceName: string,
@@ -636,11 +942,16 @@ export class DashboardService {
   ): Promise<RenderManifest> {
     return this.renderDashboardSnapshots(
       await Promise.all(
-        entries.map(async (entry) => ({
-          entry,
-          snapshot: await this.repositoryRevisionSnapshot(this.repository, entry),
-          revisionId: (await this.currentCheckedOutRevision(entry))?.id,
-        })),
+        entries.map(async (entry) => {
+          const targetRevision = await this.targetRevisionState(entry, instanceName, targetName);
+          return {
+            entry,
+            snapshot: targetRevision.snapshot,
+            revisionId: targetRevision.revision.id,
+            targetState: targetRevision.targetState,
+            revisionState: targetRevision.revisionState,
+          };
+        }),
       ),
       instanceName,
       targetName,
@@ -667,6 +978,11 @@ export class DashboardService {
           entry,
           snapshot,
           revisionId: revisionIdValue,
+          targetState: await this.ensureTargetState(entry, instanceName, targetName),
+          revisionState: this.buildRevisionState(
+            snapshot.dashboard,
+            (await this.targetRevisionState(entry, instanceName, targetName).catch(() => undefined))?.revisionState,
+          ),
         },
       ],
       instanceName,
@@ -829,6 +1145,46 @@ export class DashboardService {
           targetBaseUrl: runtime.baseUrl,
           deploymentTargetName: target.targetName,
         });
+
+        const entry: DashboardManifestEntry = {
+          name: dashboard.selectorName,
+          uid: dashboard.baseUid,
+          path: dashboard.path,
+        };
+        const normalizedDashboard = normalizeDashboardDatasourceRefsFromCatalog(
+          {
+            ...sanitizeDashboardForStorage(rawDashboard),
+            uid: dashboard.baseUid,
+          },
+          await this.repository.readDatasourceCatalog(),
+          target.instanceName,
+        );
+        const snapshot: DashboardRevisionSnapshot = {
+          version: 1,
+          dashboard: normalizedDashboard,
+          ...(normalizeFolderPath(dashboard.folderPath) ? { folderPath: normalizeFolderPath(dashboard.folderPath) } : {}),
+        };
+        const revision = await this.createOrReuseRevision(
+          entry,
+          snapshot,
+          {
+            kind: "manual",
+            instanceName: target.instanceName,
+            targetName: target.targetName,
+            effectiveDashboardUid: dashboard.effectiveDashboardUid,
+          },
+        );
+        const previousRevisionState = await this.targetRevisionState(entry, target.instanceName, target.targetName).catch(
+          () => undefined,
+        );
+        const targetState = await this.updateTargetRevision(entry, target.instanceName, target.targetName, revision.id, {
+          ...(normalizeFolderPath(dashboard.folderPath) ? { folderPath: normalizeFolderPath(dashboard.folderPath) } : {}),
+        });
+        targetState.revisionStates[revision.id] = this.buildRevisionState(
+          normalizedDashboard,
+          previousRevisionState?.revisionState,
+        );
+        await this.repository.saveTargetOverrideFile(target.instanceName, target.targetName, entry, targetState);
       }
     }
 
@@ -845,10 +1201,11 @@ export class DashboardService {
     instanceName: string,
     targetName: string,
   ): Promise<DashboardRevisionRecord> {
+    await this.assertPullTargetIsDevTarget(instanceName, targetName);
     const client = await this.clientFactory(instanceName);
     const folders = await client.listFolders();
-    const overrideFile = await this.materializeDashboardUidForTarget(this.repository, instanceName, targetName, entry);
-    const effectiveDashboardUid = this.effectiveDashboardUidForTarget(entry, targetName, overrideFile);
+    const targetState = await this.materializeDashboardUidForTarget(this.repository, instanceName, targetName, entry);
+    const effectiveDashboardUid = this.effectiveDashboardUidForTarget(entry, targetName, targetState);
     if (!effectiveDashboardUid) {
       throw new Error(`Dashboard UID is not materialized for ${selectorNameForEntry(entry)} on ${instanceName}/${targetName}.`);
     }
@@ -869,7 +1226,7 @@ export class DashboardService {
       dashboard: normalizedDashboard,
       ...(normalizeFolderPath(folderPath) ? { folderPath: normalizeFolderPath(folderPath) } : {}),
     };
-    const revision = await this.createOrReuseRevision(
+    const revision = await this.createOrUpdatePulledRevision(
       entry,
       snapshot,
       {
@@ -882,7 +1239,17 @@ export class DashboardService {
     );
     await this.checkoutRevisionSnapshot(entry, revision, snapshot, {
       folderUid: response.meta.folderUid,
+      folderPath,
+      updateFolderMeta: true,
     });
+    const nextTargetState = await this.updateTargetRevision(entry, instanceName, targetName, revision.id, {
+      ...(normalizeFolderPath(folderPath) ? { folderPath: normalizeFolderPath(folderPath) } : {}),
+    });
+    nextTargetState.revisionStates[revision.id] = this.buildRevisionState(
+      normalizedDashboard,
+      targetState?.currentRevisionId ? targetState.revisionStates[targetState.currentRevisionId] : undefined,
+    );
+    await this.repository.saveTargetOverrideFile(instanceName, targetName, entry, nextTargetState);
     return revision;
   }
 
@@ -892,33 +1259,105 @@ export class DashboardService {
     instanceName: string,
     targetName: string,
   ): Promise<DeploySummary> {
+    const revision = await this.revisionById(entry, revisionIdValue);
+    if (!revision) {
+      throw new Error(`Revision not found: ${revisionIdValue}`);
+    }
+    await this.updateTargetRevision(entry, instanceName, targetName, revision.id);
+    return this.deployDashboards([entry], instanceName, targetName);
+  }
+
+  async setTargetRevision(
+    entry: DashboardManifestEntry,
+    revisionIdValue: string,
+    instanceName: string,
+    targetName: string,
+  ): Promise<DashboardTargetState> {
+    const revision = await this.revisionById(entry, revisionIdValue);
+    if (!revision) {
+      throw new Error(`Revision not found: ${revisionIdValue}`);
+    }
+    return this.updateTargetRevision(entry, instanceName, targetName, revision.id);
+  }
+
+  async deleteRevision(entry: DashboardManifestEntry, revisionIdValue: string): Promise<void> {
     const index = await this.ensureDashboardVersionIndex(entry);
     const revision = index.revisions.find((candidate) => candidate.id === revisionIdValue);
     if (!revision) {
       throw new Error(`Revision not found: ${revisionIdValue}`);
     }
-    const snapshot = await this.repository.readDashboardRevisionSnapshot(entry, revision.id);
-    if (!snapshot) {
-      throw new Error(`Revision snapshot not found: ${revision.id}`);
+    if (index.revisions.length <= 1) {
+      throw new Error("Cannot delete the last remaining revision.");
     }
-    const client = await this.clientFactory(instanceName);
-    const connection = await this.repository.loadConnectionConfig(instanceName);
-    const folderCache = await client.listFolders();
-    const renderManifest = await this.renderDashboardSnapshots(
-      [{ entry, snapshot, revisionId: revision.id }],
-      instanceName,
-      targetName,
-      "dashboard",
-      { sourceRepository: this.repository },
-    );
-    await this.createTargetBackup([entry], instanceName, targetName, "dashboard");
-    return this.deployRenderedManifest(renderManifest, instanceName, targetName, client, connection.baseUrl, folderCache);
+    if (index.checkedOutRevisionId === revisionIdValue) {
+      throw new Error("Cannot delete the checked out revision.");
+    }
+
+    const targets = await this.repository.listAllDeploymentTargets();
+    const activeTargets: string[] = [];
+    for (const target of targets) {
+      const targetState = await this.repository.readTargetOverrideFile(target.instanceName, target.name, entry);
+      if (targetState?.currentRevisionId === revisionIdValue) {
+        activeTargets.push(`${target.instanceName}/${target.name}`);
+      }
+    }
+    if (activeTargets.length > 0) {
+      throw new Error(`Cannot delete revision ${revisionIdValue} because it is active on: ${activeTargets.join(", ")}`);
+    }
+
+    for (const target of targets) {
+      const targetState = await this.repository.readTargetOverrideFile(target.instanceName, target.name, entry);
+      if (!targetState?.revisionStates?.[revisionIdValue]) {
+        continue;
+      }
+      const nextRevisionStates = { ...targetState.revisionStates };
+      delete nextRevisionStates[revisionIdValue];
+      await this.repository.saveTargetOverrideFile(target.instanceName, target.name, entry, {
+        ...targetState,
+        revisionStates: nextRevisionStates,
+      });
+    }
+
+    await this.repository.saveDashboardVersionIndex(entry, {
+      ...index,
+      revisions: index.revisions.filter((candidate) => candidate.id !== revisionIdValue),
+    });
+    await this.repository.deleteDashboardRevisionSnapshot(entry, revisionIdValue);
+  }
+
+  async dashboardBrowserUrl(
+    entry: DashboardManifestEntry,
+    instanceName: string,
+    targetName: string,
+  ): Promise<string> {
+    const targetState = await this.ensureTargetState(entry, instanceName, targetName);
+    const effectiveDashboardUid = this.effectiveDashboardUidForTarget(entry, targetName, targetState);
+    if (!effectiveDashboardUid) {
+      throw new Error(`Dashboard UID is not materialized for ${selectorNameForEntry(entry)} on ${instanceName}/${targetName}.`);
+    }
+
+    const instanceValues = await this.repository.loadInstanceEnvValues(instanceName);
+    const baseUrl = instanceValues.GRAFANA_URL?.trim();
+    if (!baseUrl) {
+      throw new Error(`GRAFANA_URL is not configured for ${instanceName}.`);
+    }
+
+    const fallbackUrl = new URL(`d/${encodeURIComponent(effectiveDashboardUid)}`, `${baseUrl.replace(/\/+$/, "")}/`).toString();
+
+    try {
+      const client = await this.clientFactory(instanceName);
+      const response = await client.getDashboardByUid(effectiveDashboardUid);
+      const metaUrl = response.meta.url?.trim();
+      return metaUrl ? new URL(metaUrl, `${baseUrl.replace(/\/+$/, "")}/`).toString() : fallbackUrl;
+    } catch {
+      return fallbackUrl;
+    }
   }
 
   private effectiveDashboardUidForTarget(
     entry: DashboardManifestEntry,
     targetName: string,
-    overrideFile: DashboardOverrideFile | undefined,
+    overrideFile: DashboardTargetState | undefined,
   ): string | undefined {
     if (isDefaultTarget(targetName)) {
       return entry.uid;
@@ -933,7 +1372,7 @@ export class DashboardService {
     instanceName: string,
     targetName: string,
     entry: DashboardManifestEntry,
-  ): Promise<DashboardOverrideFile | undefined> {
+  ): Promise<DashboardTargetState | undefined> {
     const existingOverride = await sourceRepository.readTargetOverrideFile(instanceName, targetName, entry);
     if (isDefaultTarget(targetName)) {
       return existingOverride;
@@ -944,10 +1383,11 @@ export class DashboardService {
       return existingOverride;
     }
 
-    const nextOverride: DashboardOverrideFile = {
+    const nextOverride: DashboardTargetState = {
       dashboardUid: randomUUID(),
       ...(existingOverride?.folderPath ? { folderPath: existingOverride.folderPath } : {}),
-      variables: existingOverride?.variables ?? {},
+      ...(existingOverride?.currentRevisionId ? { currentRevisionId: existingOverride.currentRevisionId } : {}),
+      revisionStates: existingOverride?.revisionStates ?? {},
     };
     await sourceRepository.saveTargetOverrideFile(instanceName, targetName, entry, nextOverride);
     return nextOverride;
@@ -1087,6 +1527,7 @@ export class DashboardService {
     if (!instanceName) {
       throw new Error("Choose a concrete Grafana instance and deployment target for pull.");
     }
+    await this.assertPullTargetIsDevTarget(instanceName, targetName);
 
     const client = await this.clientFactory(instanceName);
     const folders = await client.listFolders();
@@ -1115,8 +1556,8 @@ export class DashboardService {
       }
       const selectorName = selectorNameForEntry(entry);
       this.log.info(`Pulling ${selectorName} from ${instanceName}/${targetName}`);
-      const overrideFile = await this.materializeDashboardUidForTarget(this.repository, instanceName, targetName, entry);
-      const effectiveDashboardUid = this.effectiveDashboardUidForTarget(entry, targetName, overrideFile);
+      const existingState = await this.materializeDashboardUidForTarget(this.repository, instanceName, targetName, entry);
+      const effectiveDashboardUid = this.effectiveDashboardUidForTarget(entry, targetName, existingState);
       if (!effectiveDashboardUid) {
         throw new Error(`Dashboard UID is not materialized for ${selectorName} on ${instanceName}/${targetName}.`);
       }
@@ -1145,6 +1586,31 @@ export class DashboardService {
         ...normalizeDashboardDatasourceRefs(pulledDashboard, nextCatalogState.sourceNamesByUid),
         uid: entry.uid,
       };
+      const pulledFolderPath =
+        response.meta.folderUid
+          ? buildFolderPathByUid(response.meta.folderUid, folders) ||
+            normalizeFolderPath(
+              response.meta.folderTitle ||
+                folders.find((folder) => folder.uid === response.meta.folderUid)?.title ||
+                path.basename(path.dirname(entry.path)),
+            )
+          : undefined;
+      const snapshot: DashboardRevisionSnapshot = {
+        version: 1,
+        dashboard,
+        ...(normalizeFolderPath(pulledFolderPath) ? { folderPath: normalizeFolderPath(pulledFolderPath) } : {}),
+      };
+      const revision = await this.createOrUpdatePulledRevision(
+        entry,
+        snapshot,
+        {
+          kind: "pull",
+          instanceName,
+          targetName,
+          effectiveDashboardUid,
+        },
+        { checkout: true },
+      );
 
       const fileResults: PullFileResult[] = [];
 
@@ -1166,41 +1632,11 @@ export class DashboardService {
       }
 
       const folderMetaPath = this.repository.folderMetaPathForEntry(entry);
-      if (folderMetaPath && response.meta.folderUid) {
-        const existingFolderMeta = await this.repository.readFolderMetadata(entry);
-        const preserveFolderPath = await this.repository.hasAnyFolderPathOverride(entry);
-        const pulledFolderPath =
-          buildFolderPathByUid(response.meta.folderUid, folders) ||
-          normalizeFolderPath(
-            response.meta.folderTitle ||
-              folders.find((folder) => folder.uid === response.meta.folderUid)?.title ||
-              path.basename(path.dirname(entry.path)),
-          );
-        const folderPath =
-          preserveFolderPath && existingFolderMeta?.path
-            ? normalizeFolderPath(existingFolderMeta.path)
-            : pulledFolderPath;
-        const snapshot: DashboardRevisionSnapshot = {
-          version: 1,
-          dashboard,
-          ...(folderPath ? { folderPath } : {}),
-        };
-        await this.createOrReuseRevision(
-          entry,
-          snapshot,
-          {
-            kind: "pull",
-            instanceName,
-            targetName,
-            effectiveDashboardUid,
-          },
-          { checkout: true },
-        );
-
+      if (folderMetaPath && (normalizeFolderPath(pulledFolderPath) || response.meta.folderUid)) {
         const folderMetaOutcome = await this.repository.syncPulledFile({
           sourceContent: stableJsonStringify({
-            ...(folderPath ? { path: folderPath } : {}),
-            uid: response.meta.folderUid,
+            ...(normalizeFolderPath(pulledFolderPath) ? { path: normalizeFolderPath(pulledFolderPath) } : {}),
+            ...(response.meta.folderUid ? { uid: response.meta.folderUid } : {}),
           }),
           targetPath: folderMetaPath,
         });
@@ -1218,22 +1654,30 @@ export class DashboardService {
           skippedCount += 1;
         }
       }
-      else {
-        await this.createOrReuseRevision(
-          entry,
-          {
-            version: 1,
-            dashboard,
-          },
-          {
-            kind: "pull",
-            instanceName,
-            targetName,
-            effectiveDashboardUid,
-          },
-          { checkout: true },
-        );
-      }
+
+      await this.checkoutRevisionSnapshot(entry, revision, snapshot, {
+        folderUid: response.meta.folderUid,
+        folderPath: pulledFolderPath,
+        updateFolderMeta: Boolean(folderMetaPath),
+      });
+
+      const previousRevisionState =
+        existingState?.currentRevisionId ? existingState.revisionStates[existingState.currentRevisionId] : undefined;
+      const previousManagedVariables = new Set(Object.keys(previousRevisionState?.variableOverrides ?? {}));
+      const pulledVariableDefaults = this.variableDefaultsFromDashboard(dashboard);
+      const nextTargetState = await this.updateTargetRevision(entry, instanceName, targetName, revision.id, {
+        ...(normalizeFolderPath(pulledFolderPath) ? { folderPath: normalizeFolderPath(pulledFolderPath) } : {}),
+      });
+      const inheritedRevisionState = this.buildRevisionState(dashboard, previousRevisionState);
+      nextTargetState.revisionStates[revision.id] = {
+        ...inheritedRevisionState,
+        variableOverrides: Object.fromEntries(
+          [...previousManagedVariables]
+            .filter((variableName) => pulledVariableDefaults[variableName] !== undefined)
+            .map((variableName) => [variableName, pulledVariableDefaults[variableName]!]),
+        ) as Record<string, DashboardOverrideValue>,
+      };
+      await this.repository.saveTargetOverrideFile(instanceName, targetName, entry, nextTargetState);
 
       dashboardResults.push({
         entry,
@@ -1279,23 +1723,18 @@ export class DashboardService {
     await this.materializeDashboardUidsForInstance(sourceRepository, instanceName);
     await this.validateInstanceEffectiveDashboardUids(sourceRepository, instanceName);
 
-    if (sourceRepository === this.repository) {
-      for (const entry of entries) {
-        await this.ensureWorkingCopyCheckedOutRevision(entry, {
-          kind: "deploy",
-          instanceName,
-          targetName,
-        });
-      }
-    }
     const renderManifest = await this.renderDashboardSnapshots(
       await Promise.all(
-        entries.map(async (entry) => ({
-          entry,
-          snapshot: await this.repositoryRevisionSnapshot(sourceRepository, entry),
-          revisionId:
-            sourceRepository === this.repository ? (await this.currentCheckedOutRevision(entry))?.id : undefined,
-        })),
+        entries.map(async (entry) => {
+          const targetRevision = await this.targetRevisionState(entry, instanceName, targetName, sourceRepository);
+          return {
+            entry,
+            snapshot: targetRevision.snapshot,
+            revisionId: targetRevision.revision.id,
+            targetState: targetRevision.targetState,
+            revisionState: targetRevision.revisionState,
+          };
+        }),
       ),
       instanceName,
       targetName,
@@ -1309,7 +1748,13 @@ export class DashboardService {
   }
 
   private async renderDashboardSnapshots(
-    items: Array<{ entry: DashboardManifestEntry; snapshot: DashboardRevisionSnapshot; revisionId?: string }>,
+    items: Array<{
+      entry: DashboardManifestEntry;
+      snapshot: DashboardRevisionSnapshot;
+      revisionId?: string;
+      targetState: DashboardTargetState;
+      revisionState: DashboardTargetRevisionState;
+    }>,
     instanceName: string,
     targetName: string,
     scope: RenderScope,
@@ -1321,21 +1766,17 @@ export class DashboardService {
     await this.repository.clearRenderRoot(instanceName, targetName);
     const dashboards: RenderManifestDashboardRecord[] = [];
 
-    for (const { entry, snapshot, revisionId } of items) {
+    for (const { entry, snapshot, revisionId, targetState, revisionState } of items) {
       const renderedDashboard = await this.renderDashboardForTarget(
         sourceRepository,
         entry,
         snapshot.dashboard,
+        targetState,
+        revisionState,
         instanceName,
         targetName,
       );
-      const folderPath = await this.desiredFolderPathForSnapshot(
-        sourceRepository,
-        entry,
-        instanceName,
-        targetName,
-        snapshot.folderPath,
-      );
+      const folderPath = normalizeFolderPath(targetState.folderPath ?? snapshot.folderPath);
       const renderPath = this.repository.renderDashboardPath(instanceName, targetName, entry);
       await this.repository.writeJsonFile(renderPath, sanitizeDashboardForStorage(renderedDashboard));
       dashboards.push({
@@ -1414,19 +1855,24 @@ export class DashboardService {
     targetName: string,
     entry: DashboardManifestEntry,
   ): Promise<OverrideGenerationResult> {
-    const dashboard = await this.repository.readDashboardJson(entry);
-    const overrideFile = generateOverrideFileFromDashboard(dashboard);
-    const variableCount = Object.keys(overrideFile.variables).length;
+    const targetRevision = await this.targetRevisionState(entry, instanceName, targetName);
+    const overrideFile = generateOverrideFileFromDashboard(targetRevision.snapshot.dashboard);
+    const variableCount = Object.keys(overrideFile.variableOverrides).length;
     if (variableCount === 0) {
       throw new Error("No supported dashboard variables found. Only custom, textbox, and constant are supported.");
     }
 
-    await this.materializeDashboardUidForTarget(this.repository, instanceName, targetName, entry);
-    const existingOverride = (await this.repository.readTargetOverrideFile(instanceName, targetName, entry)) ?? { variables: {} };
-    const overridePath = await this.repository.saveTargetOverrideFile(instanceName, targetName, entry, {
-      ...existingOverride,
-      variables: overrideFile.variables,
-    });
+    const nextTargetState = {
+      ...targetRevision.targetState,
+      revisionStates: {
+        ...targetRevision.targetState.revisionStates,
+        [targetRevision.revision.id]: {
+          ...targetRevision.revisionState,
+          variableOverrides: overrideFile.variableOverrides,
+        },
+      },
+    };
+    const overridePath = await this.repository.saveTargetOverrideFile(instanceName, targetName, entry, nextTargetState);
     return {
       overridePath,
       variableCount,
@@ -1438,19 +1884,21 @@ export class DashboardService {
     targetName: string,
     entry: DashboardManifestEntry,
   ): Promise<OverrideEditorVariableModel[]> {
-    const dashboard = await this.repository.readDashboardJson(entry);
-    const savedOverride = await this.repository.readTargetOverrideFile(instanceName, targetName, entry);
-    const effectiveDashboard = applyOverridesToDashboard(dashboard, savedOverride);
+    const targetRevision = await this.targetRevisionState(entry, instanceName, targetName);
+    const effectiveDashboard = applyOverridesToDashboard(targetRevision.snapshot.dashboard, targetRevision.revisionState);
     const targets = await this.repository.listAllDeploymentTargets();
     const globallyManagedVariableNames = new Set<string>();
     for (const target of targets) {
-      const overrideFile = await this.repository.readTargetOverrideFile(target.instanceName, target.name, entry);
-      for (const variableName of Object.keys(overrideFile?.variables ?? {})) {
+      const targetRevisionState = await this.targetRevisionState(entry, target.instanceName, target.name).catch(() => undefined);
+      if (!targetRevisionState) {
+        continue;
+      }
+      for (const variableName of Object.keys(targetRevisionState.revisionState.variableOverrides ?? {})) {
         globallyManagedVariableNames.add(variableName);
       }
     }
 
-    return extractSupportedVariables(effectiveDashboard, savedOverride).map((descriptor) => {
+    return extractSupportedVariables(effectiveDashboard, targetRevision.revisionState).map((descriptor) => {
       const hasManagedOverride = descriptor.savedOverride !== undefined || globallyManagedVariableNames.has(descriptor.name);
       return {
       name: descriptor.name,
@@ -1480,35 +1928,14 @@ export class DashboardService {
     entry: DashboardManifestEntry,
     values: Record<string, string>,
   ): Promise<string> {
-    await this.materializeDashboardUidForTarget(this.repository, instanceName, targetName, entry);
-    const dashboard = await this.repository.readDashboardJson(entry);
+    const selectedTargetRevision = await this.targetRevisionState(entry, instanceName, targetName);
     const supportedVariables = new Map(
-      extractSupportedVariables(dashboard).map((descriptor) => [descriptor.name, descriptor]),
+      extractSupportedVariables(selectedTargetRevision.snapshot.dashboard).map((descriptor) => [descriptor.name, descriptor]),
     );
-    const targets = await this.repository.listAllDeploymentTargets();
-    const existingOverrideFiles = new Map(
-      await Promise.all(
-        targets.map(
-          async (target) =>
-            [`${target.instanceName}/${target.name}`, await this.repository.readTargetOverrideFile(target.instanceName, target.name, entry)] as const,
-        ),
-      ),
-    );
-    const managedByOtherInstances = new Set<string>();
-    for (const target of targets) {
-      if (target.instanceName === instanceName && target.name === targetName) {
-        continue;
-      }
-      for (const variableName of Object.keys(existingOverrideFiles.get(`${target.instanceName}/${target.name}`)?.variables ?? {})) {
-        managedByOtherInstances.add(variableName);
-      }
-    }
-
-    const currentVariables: DashboardOverrideFile["variables"] = {};
+    const currentVariables: DashboardTargetRevisionState["variableOverrides"] = {};
     const enabledVariableNames = Object.keys(values)
       .filter((key) => key.startsWith("override_enabled__"))
       .map((key) => key.slice("override_enabled__".length));
-    const enabledVariableNameSet = new Set(enabledVariableNames);
 
     for (const name of enabledVariableNames) {
       const rawValue = values[`override_value__${name}`] ?? "";
@@ -1533,144 +1960,31 @@ export class DashboardService {
         currentVariables[name] = parsed;
       }
     }
-
-    const nextManagedVariableNames = new Set<string>([...managedByOtherInstances, ...enabledVariableNameSet]);
-    const effectiveVariablesByTarget = new Map<string, Record<string, DashboardOverrideValue>>();
-
-    for (const target of targets) {
-      const overrideFile = existingOverrideFiles.get(`${target.instanceName}/${target.name}`);
-      const effectiveDashboard = applyOverridesToDashboard(dashboard, overrideFile);
-      const effectiveVariables = Object.fromEntries(
-        extractSupportedVariables(effectiveDashboard).map((descriptor) => [
-          descriptor.name,
-          normalizeCurrentForStorage({
-            text: descriptor.currentText,
-            value: descriptor.currentValue,
-          }),
-        ]),
-      ) as Record<string, DashboardOverrideValue>;
-      effectiveVariablesByTarget.set(`${target.instanceName}/${target.name}`, effectiveVariables);
-    }
-
-    for (const target of targets) {
-      const existingOverride = existingOverrideFiles.get(`${target.instanceName}/${target.name}`);
-      const existingVariables = {
-        ...(existingOverride?.variables ?? {}),
-      };
-      const existingFolderPath = normalizeFolderPath(existingOverride?.folderPath);
-
-      for (const variableName of supportedVariables.keys()) {
-        const managed = nextManagedVariableNames.has(variableName);
-        if (!managed) {
-          delete existingVariables[variableName];
-          continue;
-        }
-
-        if (target.instanceName === instanceName && target.name === targetName && variableName in currentVariables) {
-          existingVariables[variableName] = currentVariables[variableName]!;
-          continue;
-        }
-
-        if (existingVariables[variableName] !== undefined) {
-          continue;
-        }
-
-        const seededValue = effectiveVariablesByTarget.get(`${target.instanceName}/${target.name}`)?.[variableName];
-        if (seededValue !== undefined) {
-          existingVariables[variableName] = seededValue;
-        }
-      }
-
-      await this.repository.saveTargetOverrideFile(target.instanceName, target.name, entry, {
-        ...(existingOverride?.dashboardUid ? { dashboardUid: existingOverride.dashboardUid } : {}),
-        ...(existingFolderPath ? { folderPath: existingFolderPath } : {}),
-        variables: existingVariables,
-      });
-    }
+    const nextRevisionState: DashboardTargetRevisionState = {
+      ...selectedTargetRevision.revisionState,
+      variableOverrides: currentVariables,
+    };
+    const nextTargetState: DashboardTargetState = {
+      ...selectedTargetRevision.targetState,
+      revisionStates: {
+        ...selectedTargetRevision.targetState.revisionStates,
+        [selectedTargetRevision.revision.id]: nextRevisionState,
+      },
+    };
+    await this.repository.saveTargetOverrideFile(instanceName, targetName, entry, nextTargetState);
 
     return this.repository.targetOverridePath(instanceName, targetName, entry);
   }
 
   private async materializeManagedOverridesForTarget(instanceName: string, targetName: string): Promise<void> {
     const records = await this.repository.listDashboardRecords();
-    const allTargets = await this.repository.listAllDeploymentTargets();
-    const currentTargetKey = `${instanceName}/${targetName}` as `${string}/${string}`;
 
     for (const record of records) {
-      const materializedOverride = await this.materializeDashboardUidForTarget(this.repository, instanceName, targetName, record.entry);
-      const dashboard = await this.repository.readDashboardJson(record.entry);
-      const supportedVariables = extractSupportedVariables(dashboard);
-
-      const existingOverrideFiles = new Map(
-        await Promise.all(
-          allTargets.map(
-            async (target) =>
-              [`${target.instanceName}/${target.name}`, await this.repository.readTargetOverrideFile(target.instanceName, target.name, record.entry)] as const,
-          ),
-        ),
-      );
-      existingOverrideFiles.set(currentTargetKey, materializedOverride);
-
-      const managedVariableNames = new Set<string>();
-      for (const [targetKey, overrideFile] of existingOverrideFiles) {
-        if (targetKey === currentTargetKey) {
-          continue;
-        }
-        for (const variableName of Object.keys(overrideFile?.variables ?? {})) {
-          managedVariableNames.add(variableName);
-        }
-      }
-
-      if (managedVariableNames.size === 0 && supportedVariables.length === 0) {
+      const currentTargetState = await this.targetRevisionState(record.entry, instanceName, targetName).catch(() => undefined);
+      if (!currentTargetState) {
         continue;
       }
-
-      const existingOverride = existingOverrideFiles.get(currentTargetKey);
-      const effectiveDashboard = applyOverridesToDashboard(dashboard, existingOverride);
-      const effectivePlacement = await this.buildPlacementDetails(instanceName, targetName, record.entry);
-      const effectiveVariables = Object.fromEntries(
-        extractSupportedVariables(effectiveDashboard).map((descriptor) => [
-          descriptor.name,
-          normalizeCurrentForStorage({
-            text: descriptor.currentText,
-            value: descriptor.currentValue,
-          }),
-        ]),
-      ) as Record<string, DashboardOverrideValue>;
-
-      const nextVariables = {
-        ...(existingOverride?.variables ?? {}),
-      };
-      const nextFolderPath = normalizeFolderPath(existingOverride?.folderPath) ?? effectivePlacement.effectiveFolderPath;
-      let changed = false;
-
-      for (const variable of supportedVariables) {
-        if (!managedVariableNames.has(variable.name)) {
-          continue;
-        }
-        if (nextVariables[variable.name] !== undefined) {
-          continue;
-        }
-
-        const seededValue = effectiveVariables[variable.name];
-        if (seededValue === undefined) {
-          continue;
-        }
-        nextVariables[variable.name] = seededValue;
-        changed = true;
-      }
-
-      if (!changed) {
-        if (!nextFolderPath || existingOverride?.folderPath) {
-          continue;
-        }
-      }
-
-      await this.repository.saveTargetOverrideFile(instanceName, targetName, record.entry, {
-        ...(existingOverride?.dashboardUid ? { dashboardUid: existingOverride.dashboardUid } : {}),
-        ...(nextFolderPath ? { folderPath: nextFolderPath } : {}),
-        variables: nextVariables,
-      });
+      await this.repository.saveTargetOverrideFile(instanceName, targetName, record.entry, currentTargetState.targetState);
     }
   }
 
@@ -1680,11 +1994,12 @@ export class DashboardService {
     entry: DashboardManifestEntry,
   ): Promise<PlacementDetails> {
     const folderMeta = await this.repository.readFolderMetadata(entry);
-    const overrideFile = await this.repository.readTargetOverrideFile(instanceName, targetName, entry);
+    const overrideFile = await this.ensureTargetState(entry, instanceName, targetName);
     const baseFolderPath = normalizeFolderPath(folderMeta?.path);
     const overrideFolderPath = normalizeFolderPath(overrideFile?.folderPath);
     const overrideDashboardUid = overrideFile?.dashboardUid?.trim() || undefined;
     return {
+      ...(overrideFile.currentRevisionId ? { currentRevisionId: overrideFile.currentRevisionId } : {}),
       baseFolderPath,
       overrideFolderPath,
       effectiveFolderPath: overrideFolderPath ?? baseFolderPath,
@@ -1700,13 +2015,13 @@ export class DashboardService {
     entry: DashboardManifestEntry,
     folderPath: string | undefined,
   ): Promise<string> {
-    await this.materializeDashboardUidForTarget(this.repository, instanceName, targetName, entry);
-    const existingOverride = (await this.repository.readTargetOverrideFile(instanceName, targetName, entry)) ?? { variables: {} };
+    const existingOverride = await this.ensureTargetState(entry, instanceName, targetName);
     const normalizedFolderPath = normalizeFolderPath(folderPath);
-    const nextOverride: DashboardOverrideFile = {
+    const nextOverride: DashboardTargetState = {
+      ...(existingOverride.currentRevisionId ? { currentRevisionId: existingOverride.currentRevisionId } : {}),
       ...(existingOverride.dashboardUid ? { dashboardUid: existingOverride.dashboardUid } : {}),
       ...(normalizedFolderPath ? { folderPath: normalizedFolderPath } : {}),
-      variables: existingOverride.variables ?? {},
+      revisionStates: existingOverride.revisionStates,
     };
     await this.repository.saveTargetOverrideFile(instanceName, targetName, entry, nextOverride);
     return this.repository.dashboardOverridesFilePath(entry);
@@ -1714,6 +2029,7 @@ export class DashboardService {
 
   async saveDatasourceSelections(
     instanceName: string,
+    targetName: string,
     selectorName: string,
     values: Array<{
       currentSourceName: string;
@@ -1727,8 +2043,8 @@ export class DashboardService {
       throw new Error(`Dashboard selector not found: ${selectorName}`);
     }
 
-    const dashboard = await this.repository.readDashboardJson(record.entry);
-    const dashboardSourceNames = new Set(extractDashboardDatasourceRefs(dashboard).map((ref) => ref.sourceUid));
+    const targetRevision = await this.targetRevisionState(record.entry, instanceName, targetName);
+    const dashboardSourceNames = new Set(extractDashboardDatasourceRefs(targetRevision.snapshot.dashboard).map((ref) => ref.sourceUid));
     const instances = await this.repository.listInstances();
     const catalog = ensureDatasourceCatalogInstances(
       await this.repository.readDatasourceCatalog(),
@@ -1739,33 +2055,8 @@ export class DashboardService {
       catalog.datasources[sourceName] ??= { instances: {} };
     }
 
-    const renameMap = new Map<string, string>();
-    for (const value of values) {
-      const currentSourceName = value.currentSourceName.trim();
-      const nextSourceName = value.nextSourceName.trim();
-      if (!currentSourceName || !dashboardSourceNames.has(currentSourceName)) {
-        continue;
-      }
-      if (!nextSourceName) {
-        throw new Error("Source datasource name must not be empty.");
-      }
-      renameMap.set(currentSourceName, nextSourceName);
-    }
-
-    const nextDatasourceEntries: DatasourceCatalogFile["datasources"] = {};
-    for (const [sourceName, entry] of Object.entries(catalog.datasources)) {
-      const nextSourceName = renameMap.get(sourceName) ?? sourceName;
-      if (nextDatasourceEntries[nextSourceName]) {
-        throw new Error(`Datasource source name already exists: ${nextSourceName}`);
-      }
-      nextDatasourceEntries[nextSourceName] = structuredClone(entry);
-    }
-
-    const renamePairs = Object.fromEntries(
-      [...renameMap.entries()].filter(([currentSourceName, nextSourceName]) => currentSourceName !== nextSourceName),
-    );
-    const nextCatalog: DatasourceCatalogFile = {
-      datasources: nextDatasourceEntries,
+    const nextBindings = {
+      ...targetRevision.revisionState.datasourceBindings,
     };
 
     for (const value of values) {
@@ -1774,42 +2065,158 @@ export class DashboardService {
       if (!currentSourceName || !nextSourceName || !dashboardSourceNames.has(currentSourceName)) {
         continue;
       }
-
-      const entry = nextCatalog.datasources[nextSourceName];
-      entry.instances[instanceName] = value.targetUid?.trim()
-        ? {
-            uid: value.targetUid.trim(),
-            ...(value.targetName?.trim() ? { name: value.targetName.trim() } : {}),
-          }
-        : {};
+      catalog.datasources[nextSourceName] ??= { instances: {} };
+      const normalizedTargetUid = value.targetUid?.trim();
+      const normalizedTargetName = value.targetName?.trim();
+      catalog.datasources[nextSourceName]!.instances[instanceName] =
+        normalizedTargetUid || normalizedTargetName
+          ? {
+              ...(normalizedTargetUid ? { uid: normalizedTargetUid } : {}),
+              ...(normalizedTargetName ? { name: normalizedTargetName } : {}),
+            }
+          : {};
+      nextBindings[currentSourceName] = nextSourceName;
     }
 
-    if (Object.keys(renamePairs).length > 0) {
-      const records = await this.repository.listDashboardRecords();
-      for (const currentRecord of records) {
-        const currentDashboard = await this.repository.readDashboardJson(currentRecord.entry);
-        const nextDashboard = renameDatasourceSourceNames(currentDashboard, renamePairs);
-        if (stableJsonStringify(nextDashboard) === stableJsonStringify(currentDashboard)) {
-          continue;
-        }
-        await this.repository.saveDashboardJson(currentRecord.entry, nextDashboard);
+    for (const sourceName of [...Object.keys(nextBindings)]) {
+      if (!dashboardSourceNames.has(sourceName)) {
+        delete nextBindings[sourceName];
       }
     }
 
-    await this.repository.saveDatasourceCatalog(nextCatalog);
+    await this.repository.saveTargetOverrideFile(instanceName, targetName, record.entry, {
+      ...targetRevision.targetState,
+      revisionStates: {
+        ...targetRevision.targetState.revisionStates,
+        [targetRevision.revision.id]: {
+          ...targetRevision.revisionState,
+          datasourceBindings: nextBindings,
+        },
+      },
+    });
+    await this.repository.saveDatasourceCatalog(catalog);
+  }
+
+  async buildTargetDatasourceRows(
+    instanceName: string,
+    targetName: string,
+    entry: DashboardManifestEntry,
+  ): Promise<TargetDatasourceBindingRow[]> {
+    const targetRevision = await this.targetRevisionState(entry, instanceName, targetName);
+    const datasourceCatalog = await this.repository.readDatasourceCatalog();
+    return buildDashboardDatasourceDescriptors(targetRevision.snapshot.dashboard)
+      .map((descriptor) => {
+        const globalDatasourceKey = targetRevision.revisionState.datasourceBindings[descriptor.sourceUid] ?? descriptor.sourceUid;
+        const target = datasourceCatalog.datasources[globalDatasourceKey]?.instances[instanceName];
+        return {
+          datasourceKey: descriptor.sourceUid,
+          sourceLabel: descriptor.label,
+          sourceType: descriptor.type,
+          usageCount: descriptor.usageCount,
+          usageKinds: descriptor.usageKinds,
+          globalDatasourceKey,
+          targetUid: target?.uid,
+          targetName: target?.name,
+        };
+      })
+      .sort((left, right) => left.datasourceKey.localeCompare(right.datasourceKey));
+  }
+
+  async buildGlobalDatasourceUsageRows(instanceName: string): Promise<GlobalDatasourceUsageRow[]> {
+    const datasourceCatalog = await this.repository.readDatasourceCatalog();
+    const records = await this.repository.listDashboardRecords();
+    const targets = await this.repository.listAllDeploymentTargets();
+    const rowMap = new Map<string, GlobalDatasourceUsageRow>();
+
+    for (const record of records) {
+      for (const target of targets) {
+        const targetRevision = await this.targetRevisionState(record.entry, target.instanceName, target.name).catch(() => undefined);
+        if (!targetRevision) {
+          continue;
+        }
+        for (const globalDatasourceKey of Object.values(targetRevision.revisionState.datasourceBindings)) {
+          const row = rowMap.get(globalDatasourceKey) ?? {
+            globalDatasourceKey,
+            dashboards: [],
+            instanceUid: datasourceCatalog.datasources[globalDatasourceKey]?.instances[instanceName]?.uid,
+            instanceName: datasourceCatalog.datasources[globalDatasourceKey]?.instances[instanceName]?.name,
+          };
+          if (!row.dashboards.includes(record.selectorName)) {
+            row.dashboards.push(record.selectorName);
+          }
+          rowMap.set(globalDatasourceKey, row);
+        }
+      }
+    }
+
+    for (const [globalDatasourceKey, catalogEntry] of Object.entries(datasourceCatalog.datasources)) {
+      rowMap.set(globalDatasourceKey, rowMap.get(globalDatasourceKey) ?? {
+        globalDatasourceKey,
+        dashboards: [],
+        instanceUid: catalogEntry.instances[instanceName]?.uid,
+        instanceName: catalogEntry.instances[instanceName]?.name,
+      });
+    }
+
+    return [...rowMap.values()]
+      .map((row) => ({
+        ...row,
+        dashboards: [...row.dashboards].sort((left, right) => left.localeCompare(right)),
+      }))
+      .sort((left, right) => left.globalDatasourceKey.localeCompare(right.globalDatasourceKey));
+  }
+
+  async buildTargetDashboardSummaryRows(
+    instanceName: string,
+    targetName: string,
+  ): Promise<TargetDashboardSummaryRow[]> {
+    const records = await this.repository.listDashboardRecords();
+    const datasourceCatalog = await this.repository.readDatasourceCatalog();
+    return Promise.all(
+      records.map(async (record) => {
+        const targetRevision = await this.targetRevisionState(record.entry, instanceName, targetName).catch(() => undefined);
+        const liveStatus = (await this.listLiveTargetVersionStatuses(record.entry)).find(
+          (status) => status.instanceName === instanceName && status.targetName === targetName,
+        );
+        if (!targetRevision) {
+          return {
+            selectorName: record.selectorName,
+            datasourceStatus: "missing",
+            liveStatus: liveStatus?.state,
+            liveMatchedRevisionId: liveStatus?.matchedRevisionId,
+          } as TargetDashboardSummaryRow;
+        }
+        const missingMappings = findMissingDatasourceMappings(
+          this.renameDatasourceBindings(targetRevision.snapshot.dashboard, targetRevision.revisionState.datasourceBindings),
+          datasourceCatalog,
+          instanceName,
+        );
+        return {
+          selectorName: record.selectorName,
+          currentRevisionId: targetRevision.targetState.currentRevisionId,
+          effectiveDashboardUid: this.effectiveDashboardUidForTarget(record.entry, targetName, targetRevision.targetState),
+          effectiveFolderPath: normalizeFolderPath(targetRevision.targetState.folderPath),
+          datasourceStatus: missingMappings.length > 0 ? "missing" : "complete",
+          liveStatus: liveStatus?.state,
+          liveMatchedRevisionId: liveStatus?.matchedRevisionId,
+        } as TargetDashboardSummaryRow;
+      }),
+    );
   }
 
   private async renderDashboardForTarget(
     sourceRepository: ProjectRepository,
     entry: DashboardManifestEntry,
     baseDashboard: Record<string, unknown>,
+    targetState: DashboardTargetState,
+    revisionState: DashboardTargetRevisionState,
     instanceName: string,
     targetName: string,
   ): Promise<Record<string, unknown>> {
-    const overrideFile = await this.materializeDashboardUidForTarget(sourceRepository, instanceName, targetName, entry);
     const datasourceCatalog = await sourceRepository.readDatasourceCatalog();
-    const dashboardWithVariableOverrides = applyOverridesToDashboard(baseDashboard, overrideFile);
-    dashboardWithVariableOverrides.uid = this.effectiveDashboardUidForTarget(entry, targetName, overrideFile);
+    const boundDashboard = this.renameDatasourceBindings(baseDashboard, revisionState.datasourceBindings);
+    const dashboardWithVariableOverrides = applyOverridesToDashboard(boundDashboard, revisionState);
+    dashboardWithVariableOverrides.uid = this.effectiveDashboardUidForTarget(entry, targetName, targetState);
     const missingMappings = findMissingDatasourceMappings(dashboardWithVariableOverrides, datasourceCatalog, instanceName);
     if (missingMappings.length > 0) {
       throw new Error(

@@ -26,13 +26,11 @@ test("loadConnectionConfig uses workspace config instance settings", async () =>
     await repository.createInstance("prod");
     await repository.saveInstanceEnvValues("prod", {
       GRAFANA_URL: "http://prod",
-      GRAFANA_NAMESPACE: "team-a",
     });
 
     const connection = await repositoryWithSecret.loadConnectionConfig("prod");
     assert.equal(connection.baseUrl, "http://prod");
     assert.equal(connection.token, "root-token");
-    assert.equal(connection.namespace, "team-a");
     assert.equal(connection.sourceLabel, ".grafana-dashboard-workspace.json -> instances.prod");
   });
 });
@@ -78,7 +76,7 @@ test("repository resolves dashboard, override and folder metadata paths", async 
   });
 });
 
-test("migrateDeploymentTargets moves legacy flat overrides into targets/default", async () => {
+test("migrateDeploymentTargets is disabled for version 4 projects", async () => {
   await withTempProject(async (_rootPath, repository) => {
     const entry = {
       name: "sync-status",
@@ -96,12 +94,8 @@ test("migrateDeploymentTargets moves legacy flat overrides into targets/default"
 
     const changed = await repository.migrateDeploymentTargets();
 
-    assert.equal(changed, true);
-    assert.deepEqual((await repository.loadWorkspaceConfig()).instances.prod.targets.default, {});
-    assert.equal(
-      await repository.readTextFileIfExists(repository.dashboardOverridesFilePath(entry)),
-      "{\n  \"dashboards\": {\n    \"uid-1\": {\n      \"targets\": {\n        \"prod/default\": {\n          \"variables\": {\n            \"site\": \"rnd\"\n          }\n        }\n      }\n    }\n  }\n}\n",
-    );
+    assert.equal(changed, false);
+    assert.equal(await repository.readTextFileIfExists(repository.dashboardOverridesFilePath(entry)), undefined);
   });
 });
 
@@ -119,7 +113,7 @@ test("saveTargetOverrideFile rejects dashboardUid on default target", async () =
     await assert.rejects(
       repository.saveTargetOverrideFile("prod", "default", entry, {
         dashboardUid: "not-allowed",
-        variables: {},
+        revisionStates: {},
       }),
       /Invalid dashboard overrides file/,
     );
@@ -139,8 +133,13 @@ test("updateManifestEntry migrates override key when base dashboard uid changes"
     await repository.createDeploymentTarget("prod", "blue");
     await repository.saveTargetOverrideFile("prod", "blue", entry, {
       dashboardUid: "uid-blue",
-      variables: {
-        site: "rnd",
+      revisionStates: {
+        rev1: {
+          variableOverrides: {
+            site: "rnd",
+          },
+          datasourceBindings: {},
+        },
       },
     });
 
@@ -151,7 +150,7 @@ test("updateManifestEntry migrates override key when base dashboard uid changes"
 
     assert.equal(
       await repository.readTextFileIfExists(repository.dashboardOverridesFilePath({ ...entry, uid: "uid-2" })),
-      "{\n  \"dashboards\": {\n    \"uid-2\": {\n      \"targets\": {\n        \"prod/blue\": {\n          \"dashboardUid\": \"uid-blue\",\n          \"variables\": {\n            \"site\": \"rnd\"\n          }\n        }\n      }\n    }\n  }\n}\n",
+      "{\n  \"dashboards\": {\n    \"uid-2\": {\n      \"targets\": {\n        \"prod/blue\": {\n          \"dashboardUid\": \"uid-blue\",\n          \"revisionStates\": {\n            \"rev1\": {\n              \"datasourceBindings\": {},\n              \"variableOverrides\": {\n                \"site\": \"rnd\"\n              }\n            }\n          }\n        }\n      }\n    }\n  }\n}\n",
     );
   });
 });
@@ -174,13 +173,11 @@ test("saveInstanceEnvValues strips GRAFANA_TOKEN from stored file", async () => 
     await repository.createInstance("prod");
     await repository.saveInstanceEnvValues("prod", {
       GRAFANA_URL: "http://prod",
-      GRAFANA_NAMESPACE: "team-a",
       GRAFANA_TOKEN: "should-not-be-written",
     });
 
     assert.deepEqual((await repository.loadWorkspaceConfig()).instances.prod, {
       grafanaUrl: "http://prod",
-      grafanaNamespace: "team-a",
       targets: {
         default: {},
       },
@@ -221,9 +218,7 @@ test("removeDashboardFromProject deletes local dashboard and overrides when requ
     });
     await repository.createInstance("prod");
     await repository.saveOverrideFile("prod", entry, {
-      variables: {
-        site: "nsk",
-      },
+      revisionStates: {},
     });
     await repository.saveDatasourceCatalog({
       datasources: {
@@ -275,7 +270,6 @@ test("createBackupSnapshot stores grouped backup and lists it", async () => {
     await repository.createInstance("prod");
     await repository.saveInstanceEnvValues("prod", {
       GRAFANA_URL: "http://prod",
-      GRAFANA_NAMESPACE: "team-a",
     });
     await repository.saveDatasourceCatalog({
       datasources: {
@@ -290,9 +284,7 @@ test("createBackupSnapshot stores grouped backup and lists it", async () => {
       },
     });
     await repository.saveOverrideFile("prod", entry, {
-      variables: {
-        site: "nsk",
-      },
+      revisionStates: {},
     });
 
     const backup = await repository.createBackupSnapshot(

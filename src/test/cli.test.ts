@@ -119,7 +119,6 @@ test.skip("deploy_dashboards.sh materializes dashboardUid for non-default target
       instances: {
         prod: {
           grafanaUrl: "http://placeholder",
-          grafanaNamespace: "default",
           targets: {
             default: {},
             blue: {},
@@ -158,7 +157,6 @@ test.skip("deploy_dashboards.sh materializes dashboardUid for non-default target
         const config = JSON.parse(await fs.readFile(workspaceConfigPath, "utf8")) as Record<string, unknown>;
         (config.instances as Record<string, unknown>).prod = {
           grafanaUrl: baseUrl,
-          grafanaNamespace: "default",
           targets: {
             default: {},
             blue: {},
@@ -216,7 +214,6 @@ test.skip("pull_dashboards.sh fetches target-specific uid and normalizes local u
       instances: {
         prod: {
           grafanaUrl: "http://placeholder",
-          grafanaNamespace: "default",
           targets: {
             default: {},
             blue: {},
@@ -268,7 +265,6 @@ test.skip("pull_dashboards.sh fetches target-specific uid and normalizes local u
         const config = JSON.parse(await fs.readFile(workspaceConfigPath, "utf8")) as Record<string, unknown>;
         (config.instances as Record<string, unknown>).prod = {
           grafanaUrl: baseUrl,
-          grafanaNamespace: "default",
           targets: {
             default: {},
             blue: {},

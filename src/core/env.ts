@@ -31,7 +31,7 @@ export function parseEnv(content: string): Record<string, string> {
 }
 
 export function stringifyEnv(values: Record<string, string | undefined>): string {
-  const preferredOrder = ["GRAFANA_URL", "GRAFANA_NAMESPACE"];
+  const preferredOrder = ["GRAFANA_URL"];
   const emitted = new Set<string>();
   const lines: string[] = [];
 

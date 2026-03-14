@@ -98,6 +98,50 @@ function logger(): LogSink {
   };
 }
 
+async function initializeTargetState(
+  repository: ProjectRepository,
+  entry: DashboardManifestEntry,
+  instanceName: string,
+  targetName: string,
+  options?: {
+    dashboardUid?: string;
+    folderPath?: string;
+    variableOverrides?: Record<string, unknown>;
+    datasourceBindings?: Record<string, string>;
+  },
+): Promise<string> {
+  const service = new DashboardService(
+    repository,
+    logger(),
+    async () =>
+      new MockGrafanaClient(
+        {
+          dashboard: {
+            title: "unused",
+            uid: entry.uid,
+          },
+          meta: {},
+        },
+        [],
+        () => {},
+      ),
+  );
+
+  const revision = (await service.listDashboardRevisions(entry))[0]!.record;
+  await repository.saveTargetOverrideFile(instanceName, targetName, entry, {
+    ...(options?.dashboardUid ? { dashboardUid: options.dashboardUid } : {}),
+    ...(options?.folderPath ? { folderPath: options.folderPath } : {}),
+    currentRevisionId: revision.id,
+    revisionStates: {
+      [revision.id]: {
+        variableOverrides: (options?.variableOverrides ?? {}) as Record<string, string | number | boolean | null | { text: unknown; value: unknown }>,
+        datasourceBindings: options?.datasourceBindings ?? {},
+      },
+    },
+  });
+  return revision.id;
+}
+
 test("pullDashboards updates changed files and skips unchanged ones", async () => {
   await withTempProject(async (repository, entry) => {
     await repository.createInstance("prod");
@@ -214,9 +258,8 @@ test("pullDashboards preserves base folder path when dashboard has explicit fold
       uid: "folder-1",
       path: "Integration",
     });
-    await repository.saveTargetOverrideFile("prod", "default", entry, {
+    await initializeTargetState(repository, entry, "prod", "default", {
       folderPath: "Integration/Dev",
-      variables: {},
     });
 
     const dashboardResponse: GrafanaDashboardResponse = {
@@ -241,7 +284,7 @@ test("pullDashboards preserves base folder path when dashboard has explicit fold
 
     assert.equal(
       await repository.readTextFileIfExists(repository.folderMetaPathForEntry(entry)!),
-      "{\n  \"path\": \"Integration\",\n  \"uid\": \"folder-2\"\n}\n",
+      "{\n  \"path\": \"Source Integration\",\n  \"uid\": \"folder-2\"\n}\n",
     );
   });
 });
@@ -250,13 +293,13 @@ test("pullDashboards uses target-specific dashboardUid and normalizes local dash
   await withTempProject(async (repository, entry) => {
     await repository.createInstance("prod");
     await repository.createDeploymentTarget("prod", "blue");
+    await repository.setDevTarget("prod", "blue");
     await repository.writeJsonFile(repository.dashboardPath(entry), {
       title: "Status",
       uid: entry.uid,
     });
-    await repository.saveTargetOverrideFile("prod", "blue", entry, {
+    await initializeTargetState(repository, entry, "prod", "blue", {
       dashboardUid: "uid-blue",
-      variables: {},
     });
 
     let requestedUid = "";
@@ -288,6 +331,76 @@ test("pullDashboards uses target-specific dashboardUid and normalizes local dash
   });
 });
 
+test("pullDashboards does not create a new revision when only managed constant override values change", async () => {
+  await withTempProject(async (repository, entry) => {
+    await repository.createInstance("prod");
+    await repository.writeJsonFile(repository.dashboardPath(entry), {
+      title: "Status",
+      uid: entry.uid,
+      templating: {
+        list: [
+          {
+            name: "site",
+            type: "constant",
+            current: {
+              text: "LUZ",
+              value: "LUZ",
+            },
+            query: "LUZ",
+          },
+        ],
+      },
+    });
+    const initialRevisionId = await initializeTargetState(repository, entry, "prod", "default", {
+      variableOverrides: {
+        site: "LUZ",
+      },
+    });
+
+    const client = new MockGrafanaClient(
+      {
+        dashboard: {
+          title: "Status",
+          uid: entry.uid,
+          templating: {
+            list: [
+              {
+                name: "site",
+                type: "constant",
+                current: {
+                  text: "LUZ1",
+                  value: "LUZ1",
+                },
+                query: "LUZ1",
+              },
+            ],
+          },
+        },
+        meta: {},
+      },
+      [],
+      () => {},
+    );
+    const service = new DashboardService(repository, logger(), async () => client);
+
+    await service.pullDashboards([entry], "prod", "default");
+
+    const index = await repository.readDashboardVersionIndex(entry);
+    assert.equal(index?.revisions.length, 1);
+    assert.equal(index?.checkedOutRevisionId, initialRevisionId);
+
+    const targetState = await repository.readTargetOverrideFile("prod", "default", entry);
+    assert.equal(targetState?.currentRevisionId, initialRevisionId);
+    assert.equal(targetState?.revisionStates[initialRevisionId]?.variableOverrides.site, "LUZ1");
+
+    const snapshot = await repository.readDashboardRevisionSnapshot(entry, initialRevisionId);
+    const site = ((snapshot?.dashboard.templating as { list?: Array<Record<string, unknown>> } | undefined)?.list ?? []).find(
+      (item) => item.name === "site",
+    );
+    assert.equal(site?.query, "LUZ1");
+  });
+});
+
 test("pullDashboards rejects mismatched dashboard uid for default target", async () => {
   await withTempProject(async (repository, entry) => {
     await repository.createInstance("prod");
@@ -312,6 +425,60 @@ test("pullDashboards rejects mismatched dashboard uid for default target", async
     await assert.rejects(
       service.pullDashboards([entry], "prod", "default"),
       /Pulled dashboard UID mismatch/,
+    );
+  });
+});
+
+test("dashboardBrowserUrl prefers Grafana meta.url and falls back to effective uid", async () => {
+  await withTempProject(async (repository, entry) => {
+    await repository.createInstance("prod");
+    await repository.saveInstanceEnvValues("prod", {
+      GRAFANA_URL: "http://prod/grafana",
+    });
+    await repository.createDeploymentTarget("prod", "blue");
+    await repository.writeJsonFile(repository.dashboardPath(entry), {
+      title: "Status",
+      uid: entry.uid,
+    });
+    await initializeTargetState(repository, entry, "prod", "blue", {
+      dashboardUid: "uid-blue",
+    });
+
+    const withMetaUrl = new DashboardService(
+      repository,
+      logger(),
+      async () =>
+        new MockGrafanaClient(
+          {
+            dashboard: {
+              title: "Status",
+              uid: "uid-blue",
+            },
+            meta: {
+              url: "/d/uid-blue/status",
+            },
+          },
+          [],
+          () => {},
+        ),
+    );
+
+    assert.equal(
+      await withMetaUrl.dashboardBrowserUrl(entry, "prod", "blue"),
+      "http://prod/d/uid-blue/status",
+    );
+
+    const withFallback = new DashboardService(
+      repository,
+      logger(),
+      async () => {
+        throw new Error("Grafana unavailable");
+      },
+    );
+
+    assert.equal(
+      await withFallback.dashboardBrowserUrl(entry, "prod", "blue"),
+      "http://prod/grafana/d/uid-blue",
     );
   });
 });
@@ -358,7 +525,6 @@ test("deployRevision deploys selected revision", async () => {
     await repository.createInstance("prod");
     await repository.saveInstanceEnvValues("prod", {
       GRAFANA_URL: "http://prod",
-      GRAFANA_NAMESPACE: "default",
     });
     await repository.writeJsonFile(repository.dashboardPath(entry), {
       title: "Status v1",
@@ -406,12 +572,100 @@ test("deployRevision deploys selected revision", async () => {
   });
 });
 
+test("deleteRevision removes an unused revision and its revision state", async () => {
+  await withTempProject(async (repository, entry) => {
+    await repository.createInstance("prod");
+    await repository.writeJsonFile(repository.dashboardPath(entry), {
+      title: "Status v1",
+      uid: entry.uid,
+    });
+
+    const service = new DashboardService(
+      repository,
+      logger(),
+      async () =>
+        new MockGrafanaClient(
+          {
+            dashboard: {
+              title: "unused",
+              uid: entry.uid,
+            },
+            meta: {},
+          },
+          [],
+          () => {},
+        ),
+    );
+
+    const firstRevision = (await service.listDashboardRevisions(entry))[0]!.record;
+    await initializeTargetState(repository, entry, "prod", "default");
+    await repository.writeJsonFile(repository.dashboardPath(entry), {
+      title: "Status v2",
+      uid: entry.uid,
+    });
+    const secondRevision = await service.createRevisionFromWorkingCopy(entry);
+    await service.checkoutRevision(entry, secondRevision.id);
+    await service.setTargetRevision(entry, secondRevision.id, "prod", "default");
+
+    await service.deleteRevision(entry, firstRevision.id);
+
+    const nextIndex = await repository.readDashboardVersionIndex(entry);
+    assert.equal(nextIndex?.revisions.some((revision) => revision.id === firstRevision.id), false);
+    assert.equal(await repository.readDashboardRevisionSnapshot(entry, firstRevision.id), undefined);
+    const targetState = await repository.readTargetOverrideFile("prod", "default", entry);
+    assert.equal(targetState?.revisionStates[firstRevision.id], undefined);
+  });
+});
+
+test("deleteRevision rejects the checked out revision and active target revision", async () => {
+  await withTempProject(async (repository, entry) => {
+    await repository.createInstance("prod");
+    await repository.writeJsonFile(repository.dashboardPath(entry), {
+      title: "Status v1",
+      uid: entry.uid,
+    });
+
+    const service = new DashboardService(
+      repository,
+      logger(),
+      async () =>
+        new MockGrafanaClient(
+          {
+            dashboard: {
+              title: "unused",
+              uid: entry.uid,
+            },
+            meta: {},
+          },
+          [],
+          () => {},
+        ),
+    );
+
+    const firstRevision = (await service.listDashboardRevisions(entry))[0]!.record;
+    await initializeTargetState(repository, entry, "prod", "default");
+    await repository.writeJsonFile(repository.dashboardPath(entry), {
+      title: "Status v2",
+      uid: entry.uid,
+    });
+    const secondRevision = await service.createRevisionFromWorkingCopy(entry);
+
+    await assert.rejects(
+      service.deleteRevision(entry, secondRevision.id),
+      /Cannot delete the checked out revision/,
+    );
+    await assert.rejects(
+      service.deleteRevision(entry, firstRevision.id),
+      /Cannot delete revision .* because it is active on: prod\/default/,
+    );
+  });
+});
+
 test("listLiveTargetVersionStatuses matches live dashboard to stored revision", async () => {
   await withTempProject(async (repository, entry) => {
     await repository.createInstance("prod");
     await repository.saveInstanceEnvValues("prod", {
       GRAFANA_URL: "http://prod",
-      GRAFANA_NAMESPACE: "default",
     });
     await repository.writeJsonFile(repository.dashboardPath(entry), {
       title: "Status v1",
@@ -442,8 +696,10 @@ test("listLiveTargetVersionStatuses matches live dashboard to stored revision", 
       {
         instanceName: "prod",
         targetName: "default",
+        storedRevisionId: revision.id,
         effectiveDashboardUid: entry.uid,
         matchedRevisionId: revision.id,
+        datasourceStatus: "complete",
         state: "matched",
       },
     ]);
@@ -455,7 +711,6 @@ test("deployDashboards applies overrides and creates missing folder", async () =
     await repository.createInstance("prod");
     await repository.saveInstanceEnvValues("prod", {
       GRAFANA_URL: "http://prod",
-      GRAFANA_NAMESPACE: "default",
     });
     await repository.saveDatasourceCatalog({
       datasources: {
@@ -502,8 +757,8 @@ test("deployDashboards applies overrides and creates missing folder", async () =
       path: "Integration",
       uid: "folder-1",
     });
-    await repository.saveOverrideFile("prod", entry, {
-      variables: {
+    await initializeTargetState(repository, entry, "prod", "default", {
+      variableOverrides: {
         site: "nsk",
       },
     });
@@ -548,7 +803,6 @@ test("renderDashboards creates persisted render artifacts", async () => {
     await repository.createInstance("prod");
     await repository.saveInstanceEnvValues("prod", {
       GRAFANA_URL: "http://prod",
-      GRAFANA_NAMESPACE: "default",
     });
     await repository.saveDatasourceCatalog({
       datasources: {
@@ -649,7 +903,6 @@ test("restoreBackup uses raw live dashboard snapshot without render", async () =
     await repository.createInstance("prod");
     await repository.saveInstanceEnvValues("prod", {
       GRAFANA_URL: "http://prod",
-      GRAFANA_NAMESPACE: "default",
     });
 
     await repository.writeJsonFile(repository.dashboardPath(entry), {
@@ -672,8 +925,8 @@ test("restoreBackup uses raw live dashboard snapshot without render", async () =
       path: "Integration",
       uid: "folder-1",
     });
-    await repository.saveOverrideFile("prod", entry, {
-      variables: {
+    await initializeTargetState(repository, entry, "prod", "default", {
+      variableOverrides: {
         site: "nsk-old",
       },
     });
@@ -727,8 +980,8 @@ test("restoreBackup uses raw live dashboard snapshot without render", async () =
         ],
       },
     });
-    await repository.saveOverrideFile("prod", entry, {
-      variables: {
+    await initializeTargetState(repository, entry, "prod", "default", {
+      variableOverrides: {
         site: "nsk-new",
       },
     });
@@ -767,7 +1020,6 @@ test("restoreBackup can restore only a selected target slice", async () => {
     await repository.createDeploymentTarget("prod", "blue");
     await repository.saveInstanceEnvValues("prod", {
       GRAFANA_URL: "http://prod",
-      GRAFANA_NAMESPACE: "default",
     });
 
     const backup = await repository.createBackupSnapshot(
@@ -940,9 +1192,8 @@ test("deployDashboards uses deployment target folderPath override to create nest
       title: "Status",
       uid: entry.uid,
     });
-    await repository.saveTargetOverrideFile("prod", "blue", entry, {
+    await initializeTargetState(repository, entry, "prod", "blue", {
       folderPath: "LUZ/Integration/RND",
-      variables: {},
     });
 
     const createdFolders: Array<{ title: string; uid?: string; parentUid?: string }> = [];
@@ -1004,13 +1255,11 @@ test("deployDashboards rejects duplicate effective dashboard uids for one instan
       title: "Other",
       uid: secondEntry.uid,
     });
-    await repository.saveTargetOverrideFile("prod", "blue", entry, {
+    await initializeTargetState(repository, entry, "prod", "blue", {
       dashboardUid: "shared-uid",
-      variables: {},
     });
-    await repository.saveTargetOverrideFile("prod", "blue", secondEntry, {
+    await initializeTargetState(repository, secondEntry, "prod", "blue", {
       dashboardUid: "shared-uid",
-      variables: {},
     });
 
     const service = new DashboardService(
@@ -1045,9 +1294,8 @@ test("savePlacement preserves target-specific dashboardUid", async () => {
       title: "Status",
       uid: entry.uid,
     });
-    await repository.saveTargetOverrideFile("prod", "blue", entry, {
+    await initializeTargetState(repository, entry, "prod", "blue", {
       dashboardUid: "uid-blue",
-      variables: {},
     });
 
     const service = new DashboardService(
@@ -1069,10 +1317,12 @@ test("savePlacement preserves target-specific dashboardUid", async () => {
 
     await service.savePlacement("prod", "blue", entry, "Integration/Dev");
 
-    assert.deepEqual(await repository.readTargetOverrideFile("prod", "blue", entry), {
-      dashboardUid: "uid-blue",
-      folderPath: "Integration/Dev",
-      variables: {},
+    const savedOverride = await repository.readTargetOverrideFile("prod", "blue", entry);
+    assert.equal(savedOverride?.dashboardUid, "uid-blue");
+    assert.equal(savedOverride?.folderPath, "Integration/Dev");
+    assert.deepEqual(savedOverride?.revisionStates[savedOverride.currentRevisionId!], {
+      variableOverrides: {},
+      datasourceBindings: {},
     });
   });
 });
@@ -1115,7 +1365,7 @@ test("folder browsing helpers list children, resolve chains, and create folders 
   });
 });
 
-test("saveDatasourceSelections renames sourceName globally and updates selected instance target mapping", async () => {
+test("saveDatasourceSelections stores target datasource bindings without rewriting dashboard files", async () => {
   await withTempProject(async (repository, entry) => {
     const secondEntry: DashboardManifestEntry = {
       name: "other-status",
@@ -1170,7 +1420,7 @@ test("saveDatasourceSelections renames sourceName globally and updates selected 
         ),
     );
 
-    await service.saveDatasourceSelections("prod", selectorNameForEntry(entry), [
+    await service.saveDatasourceSelections("prod", "default", selectorNameForEntry(entry), [
       {
         currentSourceName: "integration",
         nextSourceName: "mongo_main",
@@ -1179,24 +1429,75 @@ test("saveDatasourceSelections renames sourceName globally and updates selected 
       },
     ]);
 
-    assert.deepEqual((await repository.loadWorkspaceConfig()).datasources, {
-      mongo_main: {
-        instances: {
-          prod: {
-            name: "Integration Prod",
-            uid: "prod-datasource",
-          },
+    assert.deepEqual((await repository.loadWorkspaceConfig()).datasources.mongo_main, {
+      instances: {
+        prod: {
+          name: "Integration Prod",
+          uid: "prod-datasource",
         },
       },
     });
+    const savedTargetState = await repository.readTargetOverrideFile("prod", "default", entry);
+    assert.equal(savedTargetState?.revisionStates[savedTargetState.currentRevisionId!]?.datasourceBindings.integration, "mongo_main");
     assert.equal(
       await repository.readTextFileIfExists(repository.dashboardPath(entry)),
-      "{\n  \"datasource\": {\n    \"type\": \"prometheus\",\n    \"uid\": \"mongo_main\"\n  },\n  \"title\": \"Status\",\n  \"uid\": \"uid-1\"\n}\n",
+      "{\n  \"datasource\": {\n    \"type\": \"prometheus\",\n    \"uid\": \"integration\"\n  },\n  \"title\": \"Status\",\n  \"uid\": \"uid-1\"\n}\n",
     );
     assert.equal(
       await repository.readTextFileIfExists(repository.dashboardPath(secondEntry)),
-      "{\n  \"datasource\": {\n    \"type\": \"prometheus\",\n    \"uid\": \"mongo_main\"\n  },\n  \"title\": \"Other\",\n  \"uid\": \"uid-2\"\n}\n",
+      "{\n  \"datasource\": {\n    \"type\": \"prometheus\",\n    \"uid\": \"integration\"\n  },\n  \"title\": \"Other\",\n  \"uid\": \"uid-2\"\n}\n",
     );
+  });
+});
+
+test("saveDatasourceSelections preserves manually entered datasource name even when uid is unknown", async () => {
+  await withTempProject(async (repository, entry) => {
+    await repository.createInstance("prod");
+    await repository.writeJsonFile(repository.dashboardPath(entry), {
+      title: "Status",
+      uid: entry.uid,
+      datasource: {
+        type: "prometheus",
+        uid: "integration",
+      },
+    });
+
+    const service = new DashboardService(
+      repository,
+      logger(),
+      async () =>
+        new MockGrafanaClient(
+          {
+            dashboard: {
+              title: "unused",
+              uid: entry.uid,
+            },
+            meta: {},
+          },
+          [],
+          () => {},
+        ),
+    );
+
+    await service.saveDatasourceSelections("prod", "default", selectorNameForEntry(entry), [
+      {
+        currentSourceName: "integration",
+        nextSourceName: "mongo_main",
+        targetName: "Integration Prod",
+      },
+    ]);
+
+    assert.deepEqual((await repository.loadWorkspaceConfig()).datasources.mongo_main, {
+      instances: {
+        prod: {
+          name: "Integration Prod",
+        },
+      },
+    });
+    const rows = await service.buildTargetDatasourceRows("prod", "default", entry);
+    assert.equal(rows[0]?.globalDatasourceKey, "mongo_main");
+    assert.equal(rows[0]?.targetName, "Integration Prod");
+    assert.equal(rows[0]?.targetUid, undefined);
   });
 });
 
@@ -1251,14 +1552,15 @@ test("saveOverrideFromForm persists only checked override variables", async () =
       "override_value__env": "stage",
     });
 
-    assert.equal(
-      await repository.readTextFileIfExists(repository.dashboardOverridesFilePath(entry)),
-      "{\n  \"dashboards\": {\n    \"uid-1\": {\n      \"targets\": {\n        \"luz/default\": {\n          \"variables\": {\n            \"site\": \"LUZ\"\n          }\n        }\n      }\n    }\n  }\n}\n",
-    );
+    const overrides = JSON.parse((await repository.readTextFileIfExists(repository.dashboardOverridesFilePath(entry))) ?? "{}");
+    const defaultState = overrides.dashboards["uid-1"].targets["luz/default"];
+    assert.deepEqual(defaultState.revisionStates[defaultState.currentRevisionId].variableOverrides, {
+      site: "LUZ",
+    });
   });
 });
 
-test("saveOverrideFromForm seeds managed override variables for all instances", async () => {
+test("saveOverrideFromForm only updates the current revision state of the selected target", async () => {
   await withTempProject(async (repository, entry) => {
     await repository.createInstance("luz");
     await repository.createInstance("rnd");
@@ -1305,10 +1607,12 @@ test("saveOverrideFromForm seeds managed override variables for all instances", 
       "override_value__site": "LUZ",
     });
 
-    assert.equal(
-      await repository.readTextFileIfExists(repository.dashboardOverridesFilePath(entry)),
-      "{\n  \"dashboards\": {\n    \"uid-1\": {\n      \"targets\": {\n        \"luz/default\": {\n          \"variables\": {\n            \"site\": \"LUZ\"\n          }\n        },\n        \"rnd/default\": {\n          \"variables\": {\n            \"site\": \"RND\"\n          }\n        }\n      }\n    }\n  }\n}\n",
-    );
+    const overrides = JSON.parse((await repository.readTextFileIfExists(repository.dashboardOverridesFilePath(entry))) ?? "{}");
+    const luzState = overrides.dashboards["uid-1"].targets["luz/default"];
+    assert.deepEqual(luzState.revisionStates[luzState.currentRevisionId].variableOverrides, {
+      site: "LUZ",
+    });
+    assert.equal(overrides.dashboards["uid-1"].targets["rnd/default"], undefined);
   });
 });
 
@@ -1361,20 +1665,19 @@ test("createDeploymentTarget materializes folderPath together with managed varia
     await service.createDeploymentTarget("luz", "dev");
 
     const overrides = JSON.parse((await repository.readTextFileIfExists(repository.dashboardOverridesFilePath(entry))) ?? "{}");
-    assert.deepEqual(overrides.dashboards["uid-1"].targets["luz/default"], {
-      variables: {
-        site: "LUZ",
-      },
-    });
-    assert.equal(overrides.dashboards["uid-1"].targets["luz/dev"].folderPath, "Integration");
-    assert.deepEqual(overrides.dashboards["uid-1"].targets["luz/dev"].variables, {
+    const defaultState = overrides.dashboards["uid-1"].targets["luz/default"];
+    assert.deepEqual(defaultState.revisionStates[defaultState.currentRevisionId].variableOverrides, {
       site: "LUZ",
     });
-    assert.match(overrides.dashboards["uid-1"].targets["luz/dev"].dashboardUid, /^[0-9a-f-]{36}$/);
+    const devState = overrides.dashboards["uid-1"].targets["luz/dev"];
+    assert.equal(devState.folderPath, "Integration");
+    assert.deepEqual(devState.revisionStates[devState.currentRevisionId].variableOverrides, {});
+    assert.deepEqual(devState.revisionStates[devState.currentRevisionId].datasourceBindings, {});
+    assert.match(devState.dashboardUid, /^[0-9a-f-]{36}$/);
   });
 });
 
-test("createDeploymentTarget materializes already managed override variables for the new target", async () => {
+test("createDeploymentTarget initializes a fresh revision state for the new target", async () => {
   await withTempProject(async (repository, entry) => {
     await repository.createInstance("luz");
     await repository.writeJsonFile(repository.dashboardPath(entry), {
@@ -1419,15 +1722,14 @@ test("createDeploymentTarget materializes already managed override variables for
     await service.createDeploymentTarget("luz", "dev");
 
     const overrides = JSON.parse((await repository.readTextFileIfExists(repository.dashboardOverridesFilePath(entry))) ?? "{}");
-    assert.deepEqual(overrides.dashboards["uid-1"].targets["luz/default"], {
-      variables: {
-        site: "LUZ",
-      },
-    });
-    assert.deepEqual(overrides.dashboards["uid-1"].targets["luz/dev"].variables, {
+    const defaultState = overrides.dashboards["uid-1"].targets["luz/default"];
+    assert.deepEqual(defaultState.revisionStates[defaultState.currentRevisionId].variableOverrides, {
       site: "LUZ",
     });
-    assert.match(overrides.dashboards["uid-1"].targets["luz/dev"].dashboardUid, /^[0-9a-f-]{36}$/);
+    const devState = overrides.dashboards["uid-1"].targets["luz/dev"];
+    assert.deepEqual(devState.revisionStates[devState.currentRevisionId].variableOverrides, {});
+    assert.deepEqual(devState.revisionStates[devState.currentRevisionId].datasourceBindings, {});
+    assert.match(devState.dashboardUid, /^[0-9a-f-]{36}$/);
   });
 });
 
@@ -1459,9 +1761,9 @@ test("createDeploymentTarget seeds dashboardUid even when dashboard has no manag
     await service.createDeploymentTarget("luz", "dev");
 
     const savedOverride = await repository.readTargetOverrideFile("luz", "dev", entry);
-    assert.deepEqual(savedOverride, {
-      dashboardUid: savedOverride?.dashboardUid,
-      variables: {},
+    assert.deepEqual(savedOverride?.revisionStates[savedOverride.currentRevisionId!], {
+      variableOverrides: {},
+      datasourceBindings: {},
     });
     assert.match(savedOverride?.dashboardUid ?? "", /^[0-9a-f-]{36}$/);
   });

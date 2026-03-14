@@ -1,6 +1,6 @@
 import {
-  DashboardOverrideFile,
   DashboardOverrideObject,
+  DashboardTargetRevisionState,
   DashboardOverrideValue,
   SupportedVariableDescriptor,
 } from "./types";
@@ -87,7 +87,7 @@ export function supportedVariableTypes(): string[] {
 
 export function extractSupportedVariables(
   dashboard: Record<string, unknown>,
-  savedOverride?: DashboardOverrideFile,
+  savedOverride?: DashboardTargetRevisionState,
 ): SupportedVariableDescriptor[] {
   const items = dashboardTemplatingList(dashboard);
 
@@ -100,12 +100,13 @@ export function extractSupportedVariables(
     .map((item) => {
       const current = (item.current ?? {}) as { text?: unknown; value?: unknown };
       const name = item.name as string;
+      const constantQuery = item.type === "constant" && typeof item.query === "string" ? item.query : undefined;
       return {
         name,
         type: item.type as string,
-        currentText: current.text ?? "",
-        currentValue: current.value ?? "",
-        savedOverride: savedOverride?.variables[name],
+        currentText: constantQuery ?? current.text ?? "",
+        currentValue: constantQuery ?? current.value ?? "",
+        savedOverride: savedOverride?.variableOverrides[name],
         ...(item.type === "custom" ? { overrideOptions: normalizeCustomVariableOptions(item) } : {}),
       };
     });
@@ -151,8 +152,8 @@ export function normalizeCurrentForStorage(current: { text?: unknown; value?: un
 
 export function generateOverrideFileFromDashboard(
   dashboard: Record<string, unknown>,
-): DashboardOverrideFile {
-  const variables = Object.fromEntries(
+): DashboardTargetRevisionState {
+  const variableOverrides = Object.fromEntries(
     extractSupportedVariables(dashboard).map((descriptor) => [
       descriptor.name,
       normalizeCurrentForStorage({
@@ -162,7 +163,10 @@ export function generateOverrideFileFromDashboard(
     ]),
   );
 
-  return { variables };
+  return {
+    variableOverrides,
+    datasourceBindings: {},
+  };
 }
 
 function selectOptions(
@@ -225,9 +229,9 @@ function validateCustomOverrideValue(
 
 export function applyOverridesToDashboard(
   dashboard: Record<string, unknown>,
-  overrideFile: DashboardOverrideFile | undefined,
+  overrideFile: DashboardTargetRevisionState | undefined,
 ): Record<string, unknown> {
-  if (Object.keys(overrideFile?.variables ?? {}).length === 0) {
+  if (Object.keys(overrideFile?.variableOverrides ?? {}).length === 0) {
     return structuredClone(dashboard);
   }
 
@@ -249,7 +253,7 @@ export function applyOverridesToDashboard(
         return variable;
       }
 
-      const overrideValue = overrideFile?.variables[name];
+      const overrideValue = overrideFile?.variableOverrides[name];
       if (overrideValue === undefined) {
         return variable;
       }

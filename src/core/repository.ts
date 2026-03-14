@@ -21,6 +21,8 @@ import {
   DatasourceCatalogFile,
   DashboardFolderOverridesFile,
   DashboardOverrideFile,
+  DashboardOverrideValue,
+  DashboardTargetRevisionState,
   DashboardRecord,
   DeploymentTargetDetailsModel,
   DeploymentTargetRecord,
@@ -109,9 +111,89 @@ function targetNameFromOverrideTargetKey(targetKey: string): string {
   return slashIndex >= 0 ? targetKey.slice(slashIndex + 1) : targetKey;
 }
 
+function normalizeDashboardTargetRevisionState(
+  rawState: Record<string, unknown>,
+  filePath: string,
+  targetKey: string,
+  revisionId: string,
+): DashboardTargetRevisionState {
+  const variableOverridesRaw = rawState.variableOverrides ?? {};
+  const datasourceBindingsRaw = rawState.datasourceBindings ?? {};
+
+  if (!variableOverridesRaw || typeof variableOverridesRaw !== "object" || Array.isArray(variableOverridesRaw)) {
+    throw new Error(`Invalid dashboard target revision state in ${filePath} for ${targetKey}@${revisionId}`);
+  }
+
+  if (!datasourceBindingsRaw || typeof datasourceBindingsRaw !== "object" || Array.isArray(datasourceBindingsRaw)) {
+    throw new Error(`Invalid dashboard target revision datasource bindings in ${filePath} for ${targetKey}@${revisionId}`);
+  }
+
+  const datasourceBindings: Record<string, string> = {};
+  for (const [bindingKey, bindingValue] of Object.entries(datasourceBindingsRaw as Record<string, unknown>)) {
+    if (!bindingKey.trim() || typeof bindingValue !== "string" || !bindingValue.trim()) {
+      throw new Error(`Invalid dashboard target revision datasource binding in ${filePath} for ${targetKey}@${revisionId}`);
+    }
+    datasourceBindings[bindingKey] = bindingValue.trim();
+  }
+
+  return {
+    variableOverrides: variableOverridesRaw as Record<string, DashboardOverrideValue>,
+    datasourceBindings,
+  };
+}
+
+function normalizeDashboardTargetState(
+  rawState: Record<string, unknown>,
+  filePath: string,
+  targetKey: string,
+): DashboardOverrideFile {
+  const currentRevisionId =
+    typeof rawState.currentRevisionId === "string" && rawState.currentRevisionId.trim()
+      ? rawState.currentRevisionId.trim()
+      : undefined;
+  const dashboardUid =
+    typeof rawState.dashboardUid === "string" && rawState.dashboardUid.trim()
+      ? rawState.dashboardUid.trim()
+      : undefined;
+  const folderPath =
+    typeof rawState.folderPath === "string" && rawState.folderPath.trim()
+      ? rawState.folderPath.trim()
+      : undefined;
+  const revisionStatesRaw = rawState.revisionStates ?? {};
+  if (!revisionStatesRaw || typeof revisionStatesRaw !== "object" || Array.isArray(revisionStatesRaw)) {
+    throw new Error(`Invalid dashboard target revision states in ${filePath} for ${targetKey}`);
+  }
+
+  const revisionStates: Record<string, DashboardTargetRevisionState> = {};
+  for (const [revisionId, revisionState] of Object.entries(revisionStatesRaw as Record<string, unknown>)) {
+    if (!revisionId.trim() || !revisionState || typeof revisionState !== "object" || Array.isArray(revisionState)) {
+      throw new Error(`Invalid dashboard target revision state in ${filePath} for ${targetKey}`);
+    }
+    revisionStates[revisionId] = normalizeDashboardTargetRevisionState(
+      revisionState as Record<string, unknown>,
+      filePath,
+      targetKey,
+      revisionId,
+    );
+  }
+
+  return {
+    ...(currentRevisionId ? { currentRevisionId } : {}),
+    ...(dashboardUid ? { dashboardUid } : {}),
+    ...(folderPath ? { folderPath } : {}),
+    revisionStates,
+  };
+}
+
+function emptyDashboardTargetState(): DashboardOverrideFile {
+  return {
+    revisionStates: {},
+  };
+}
+
 function defaultWorkspaceConfig(layout: ProjectLayout): WorkspaceProjectConfig {
   return {
-    version: 2,
+    version: 4,
     layout: {
       dashboardsDir: toRelativeConfigPath(layout.projectRootPath, layout.dashboardsDir),
       backupsDir: toRelativeConfigPath(layout.projectRootPath, layout.backupsDir),
@@ -128,7 +210,7 @@ function validateWorkspaceProjectConfig(config: WorkspaceProjectConfig, filePath
   if (!config || typeof config !== "object" || Array.isArray(config)) {
     throw new Error(`Invalid workspace config: ${filePath}`);
   }
-  if (config.version !== 2) {
+  if (config.version !== 4) {
     throw new Error(`Invalid workspace config version: ${filePath}`);
   }
   if (!config.layout || typeof config.layout !== "object" || Array.isArray(config.layout)) {
@@ -153,6 +235,17 @@ function validateWorkspaceProjectConfig(config: WorkspaceProjectConfig, filePath
   ) {
     throw new Error(`Invalid workspace config maxBackups: ${filePath}`);
   }
+  if (config.devTarget !== undefined) {
+    if (!config.devTarget || typeof config.devTarget !== "object" || Array.isArray(config.devTarget)) {
+      throw new Error(`Invalid workspace config devTarget: ${filePath}`);
+    }
+    if (typeof config.devTarget.instanceName !== "string" || !config.devTarget.instanceName.trim()) {
+      throw new Error(`Invalid workspace config devTarget.instanceName: ${filePath}`);
+    }
+    if (typeof config.devTarget.targetName !== "string" || !config.devTarget.targetName.trim()) {
+      throw new Error(`Invalid workspace config devTarget.targetName: ${filePath}`);
+    }
+  }
 
   const manifestErrors = validateManifest({ dashboards: config.dashboards });
   if (manifestErrors.length > 0) {
@@ -174,9 +267,6 @@ function validateWorkspaceProjectConfig(config: WorkspaceProjectConfig, filePath
     if (instanceConfig.grafanaUrl !== undefined && typeof instanceConfig.grafanaUrl !== "string") {
       throw new Error(`Invalid workspace config grafanaUrl: ${filePath}`);
     }
-    if (instanceConfig.grafanaNamespace !== undefined && typeof instanceConfig.grafanaNamespace !== "string") {
-      throw new Error(`Invalid workspace config grafanaNamespace: ${filePath}`);
-    }
     if (!instanceConfig.targets || typeof instanceConfig.targets !== "object" || Array.isArray(instanceConfig.targets)) {
       throw new Error(`Invalid workspace config targets: ${filePath}`);
     }
@@ -187,13 +277,20 @@ function validateWorkspaceProjectConfig(config: WorkspaceProjectConfig, filePath
     }
     normalizedInstances[instanceName] = {
       ...(instanceConfig.grafanaUrl ? { grafanaUrl: instanceConfig.grafanaUrl } : {}),
-      ...(instanceConfig.grafanaNamespace ? { grafanaNamespace: instanceConfig.grafanaNamespace } : {}),
       targets: Object.fromEntries(Object.keys(instanceConfig.targets).map((targetName) => [targetName, {}])),
     };
   }
 
   return {
     ...config,
+    ...(config.devTarget
+      ? {
+          devTarget: {
+            instanceName: config.devTarget.instanceName.trim(),
+            targetName: config.devTarget.targetName.trim(),
+          },
+        }
+      : {}),
     instances: normalizedInstances,
   };
 }
@@ -278,18 +375,18 @@ function validateDashboardFolderOverridesFile(
       if (!override || typeof override !== "object" || Array.isArray(override)) {
         throw new Error(`Invalid dashboard overrides file: ${filePath}`);
       }
-      if (override.dashboardUid !== undefined && (typeof override.dashboardUid !== "string" || !override.dashboardUid.trim())) {
+      const normalizedOverride = normalizeDashboardTargetState(
+        override as unknown as Record<string, unknown>,
+        filePath,
+        targetKey,
+      );
+      if (
+        normalizedOverride.dashboardUid !== undefined &&
+        targetNameFromOverrideTargetKey(targetKey) === DEFAULT_DEPLOYMENT_TARGET
+      ) {
         throw new Error(`Invalid dashboard overrides file: ${filePath}`);
       }
-      if (targetNameFromOverrideTargetKey(targetKey) === DEFAULT_DEPLOYMENT_TARGET && override.dashboardUid !== undefined) {
-        throw new Error(`Invalid dashboard overrides file: ${filePath}`);
-      }
-      if (override.folderPath !== undefined && (typeof override.folderPath !== "string" || !override.folderPath.trim())) {
-        throw new Error(`Invalid dashboard overrides file: ${filePath}`);
-      }
-      if (!override.variables || typeof override.variables !== "object" || Array.isArray(override.variables)) {
-        throw new Error(`Invalid dashboard overrides file: ${filePath}`);
-      }
+      targets[targetKey] = normalizedOverride;
     }
   }
 
@@ -628,95 +725,12 @@ export class ProjectRepository {
   }
 
   async migrateWorkspaceConfig(): Promise<boolean> {
-    const configExists = await this.workspaceConfigExists();
-    const rawConfig = configExists ? await this.readJsonFile<Record<string, unknown>>(this.workspaceConfigPath) : {};
-    const migratedConfig = defaultWorkspaceConfig({
-      workspaceRootPath: this.workspaceRootPath,
-      projectRootPath: this.projectRootPath,
-      workspaceConfigPath: this.workspaceConfigPath,
-      configPath: this.configPath,
-      manifestPath: this.manifestPath,
-      manifestExamplePath: this.manifestExamplePath,
-      legacyDatasourceCatalogPath: this.datasourceCatalogPath,
-      dashboardsDir: this.dashboardsDir,
-      instancesDir: this.instancesDir,
-      backupsDir: this.backupsDir,
-      rendersDir: this.rendersDir,
-      rootEnvPath: this.rootEnvPath,
-      maxBackups: this.maxBackups,
-    });
-
-    if (rawConfig.version === 2) {
-      const nextRawConfig = structuredClone(rawConfig) as Record<string, unknown>;
-      const layout = ((nextRawConfig.layout as Record<string, unknown> | undefined) ??= {});
-      layout.rendersDir ??= toRelativeConfigPath(this.projectRootPath, this.rendersDir);
-      const current = validateWorkspaceProjectConfig(nextRawConfig as unknown as WorkspaceProjectConfig, this.workspaceConfigPath);
-      migratedConfig.layout = current.layout;
-      migratedConfig.dashboards = current.dashboards;
-      migratedConfig.datasources = current.datasources;
-      migratedConfig.instances = current.instances;
+    if (!(await this.workspaceConfigExists())) {
+      return false;
     }
 
-    if (migratedConfig.dashboards.length === 0 && (await exists(this.manifestPath))) {
-      const legacyManifest = await this.readJsonFile<DashboardManifest>(this.manifestPath);
-      const errors = validateManifest(legacyManifest);
-      if (errors.length > 0) {
-        throw new Error(errors.join("\n"));
-      }
-      migratedConfig.dashboards = legacyManifest.dashboards;
-    }
-
-    if (Object.keys(migratedConfig.datasources).length === 0 && (await exists(this.datasourceCatalogPath))) {
-      migratedConfig.datasources = validateDatasourceCatalogFile(
-        await this.readJsonFile<DatasourceCatalogFile>(this.datasourceCatalogPath),
-        this.datasourceCatalogPath,
-      ).datasources;
-    }
-
-    const instanceNames = new Set<string>(Object.keys(migratedConfig.instances));
-    if (await exists(this.instancesDir)) {
-      const directoryEntries = await fs.readdir(this.instancesDir, { withFileTypes: true });
-      for (const entry of directoryEntries) {
-        if (entry.isDirectory()) {
-          instanceNames.add(entry.name);
-        }
-      }
-    }
-
-    for (const instanceName of instanceNames) {
-      const currentConfig: WorkspaceInstanceConfig = {
-        ...(migratedConfig.instances[instanceName] ?? { targets: {} }),
-        targets: { ...(migratedConfig.instances[instanceName]?.targets ?? {}) },
-      };
-      const legacyEnvPath = this.instanceEnvPath(instanceName);
-      if ((!currentConfig.grafanaUrl || !currentConfig.grafanaNamespace) && (await exists(legacyEnvPath))) {
-        const parsed = parseEnv(await fs.readFile(legacyEnvPath, "utf8"));
-        if (!currentConfig.grafanaUrl && parsed.GRAFANA_URL?.trim()) {
-          currentConfig.grafanaUrl = parsed.GRAFANA_URL.trim();
-        }
-        if (!currentConfig.grafanaNamespace && parsed.GRAFANA_NAMESPACE?.trim()) {
-          currentConfig.grafanaNamespace = parsed.GRAFANA_NAMESPACE.trim();
-        }
-      }
-
-      if (Object.keys(currentConfig.targets).length === 0) {
-        currentConfig.targets[DEFAULT_DEPLOYMENT_TARGET] = {};
-      }
-
-      migratedConfig.instances[instanceName] = currentConfig;
-    }
-
-    const nextConfig = validateWorkspaceProjectConfig(migratedConfig, this.workspaceConfigPath);
-    const changed =
-      !configExists ||
-      (configExists &&
-        stableJsonStringify(nextConfig) !==
-          stableJsonStringify(rawConfig.version === 2 ? (rawConfig as unknown as WorkspaceProjectConfig) : ({} as WorkspaceProjectConfig)));
-    if (changed) {
-      await this.saveWorkspaceConfig(nextConfig);
-    }
-    await this.migrateDeploymentTargets();
-    return changed;
+    await this.loadWorkspaceConfig();
+    return false;
   }
 
   async manifestExists(): Promise<boolean> {
@@ -742,64 +756,7 @@ export class ProjectRepository {
   }
 
   async migrateDeploymentTargets(): Promise<boolean> {
-    const instances =
-      (await exists(this.instancesDir))
-        ? (await fs.readdir(this.instancesDir, { withFileTypes: true }))
-            .filter((entry) => entry.isDirectory())
-            .map((entry) => ({ name: entry.name }))
-        : [];
-    const manifest =
-      (await exists(this.manifestPath))
-        ? await this.readJsonFile<DashboardManifest>(this.manifestPath)
-        : await this.loadManifest().catch(() => ({ dashboards: [] as DashboardManifestEntry[] }));
-    let changed = false;
-
-    for (const instance of instances) {
-      for (const entry of manifest.dashboards) {
-        const legacyOverridePath = path.join(this.instancesDir, instance.name, entry.path);
-        if (await exists(legacyOverridePath)) {
-          const current = await this.readTargetOverrideFile(instance.name, DEFAULT_DEPLOYMENT_TARGET, entry);
-          if (!current) {
-            const legacyOverride = await this.readJsonFile<DashboardOverrideFile>(legacyOverridePath);
-            await this.saveTargetOverrideFile(instance.name, DEFAULT_DEPLOYMENT_TARGET, entry, legacyOverride);
-          }
-          changed = true;
-        }
-      }
-
-      const legacyTargetsDir = path.join(this.instancesDir, instance.name, "targets");
-      if (await exists(legacyTargetsDir)) {
-        const targetEntries = await fs.readdir(legacyTargetsDir, { withFileTypes: true });
-        for (const targetEntry of targetEntries) {
-          if (!targetEntry.isDirectory()) {
-            continue;
-          }
-          const targetName = targetEntry.name;
-          const config = await this.loadWorkspaceConfig();
-          config.instances[instance.name] ??= {
-            grafanaNamespace: "default",
-            targets: {},
-          };
-          config.instances[instance.name]!.targets[targetName] ??= {};
-          await this.saveWorkspaceConfig(config);
-
-          for (const entry of manifest.dashboards) {
-            const legacyTargetOverridePath = path.join(legacyTargetsDir, targetName, entry.path);
-            if (!(await exists(legacyTargetOverridePath))) {
-              continue;
-            }
-            const current = await this.readTargetOverrideFile(instance.name, targetName, entry);
-            if (!current) {
-              const legacyOverride = await this.readJsonFile<DashboardOverrideFile>(legacyTargetOverridePath);
-              await this.saveTargetOverrideFile(instance.name, targetName, entry, legacyOverride);
-            }
-          }
-          changed = true;
-        }
-      }
-    }
-
-    return changed;
+    return false;
   }
 
   async createManifestFromExample(): Promise<void> {
@@ -1212,10 +1169,13 @@ export class ProjectRepository {
     const config = await this.loadWorkspaceConfig();
     config.instances[sanitized] ??= {
       grafanaUrl: "http://localhost:3000",
-      grafanaNamespace: "default",
       targets: {
         [DEFAULT_DEPLOYMENT_TARGET]: {},
       },
+    };
+    config.devTarget ??= {
+      instanceName: sanitized,
+      targetName: DEFAULT_DEPLOYMENT_TARGET,
     };
     await this.saveWorkspaceConfig(config);
     return {
@@ -1235,6 +1195,9 @@ export class ProjectRepository {
 
     const config = await this.loadWorkspaceConfig();
     delete config.instances[instanceName];
+    if (config.devTarget?.instanceName === instanceName) {
+      config.devTarget = undefined;
+    }
     await this.saveWorkspaceConfig(config);
   }
 
@@ -1268,6 +1231,24 @@ export class ProjectRepository {
       const instanceOrder = left.instanceName.localeCompare(right.instanceName);
       return instanceOrder !== 0 ? instanceOrder : left.name.localeCompare(right.name);
     });
+  }
+
+  async getDevTarget(): Promise<WorkspaceProjectConfig["devTarget"]> {
+    const config = await this.loadWorkspaceConfig();
+    return config.devTarget;
+  }
+
+  async setDevTarget(instanceName: string, targetName: string): Promise<void> {
+    const target = await this.deploymentTargetByName(instanceName, targetName);
+    if (!target) {
+      throw new Error(`Deployment target not found: ${instanceName}/${targetName}`);
+    }
+    const config = await this.loadWorkspaceConfig();
+    config.devTarget = {
+      instanceName,
+      targetName,
+    };
+    await this.saveWorkspaceConfig(config);
   }
 
   async createDeploymentTarget(instanceName: string, targetName: string): Promise<DeploymentTargetRecord> {
@@ -1307,6 +1288,9 @@ export class ProjectRepository {
 
     const config = await this.loadWorkspaceConfig();
     delete config.instances[instanceName]?.targets[targetName];
+    if (config.devTarget?.instanceName === instanceName && config.devTarget.targetName === targetName) {
+      config.devTarget = undefined;
+    }
     await this.saveWorkspaceConfig(config);
   }
 
@@ -1323,7 +1307,6 @@ export class ProjectRepository {
 
     return {
       ...(instance.grafanaUrl ? { GRAFANA_URL: instance.grafanaUrl } : {}),
-      ...(instance.grafanaNamespace ? { GRAFANA_NAMESPACE: instance.grafanaNamespace } : {}),
     };
   }
 
@@ -1346,7 +1329,6 @@ export class ProjectRepository {
     return {
       baseUrl: baseUrl.replace(/\/+$/, ""),
       token,
-      namespace: instanceValues.GRAFANA_NAMESPACE?.trim() || "default",
       sourceLabel: `${PROJECT_CONFIG_FILE} -> instances.${instanceName}`,
     };
   }
@@ -1361,9 +1343,6 @@ export class ProjectRepository {
     config.instances[instanceName] = {
       ...instance,
       ...(values.GRAFANA_URL?.trim() ? { grafanaUrl: values.GRAFANA_URL.trim() } : { grafanaUrl: undefined }),
-      ...(values.GRAFANA_NAMESPACE?.trim()
-        ? { grafanaNamespace: values.GRAFANA_NAMESPACE.trim() }
-        : { grafanaNamespace: "default" }),
     };
     await this.saveWorkspaceConfig(config);
   }
@@ -1372,7 +1351,6 @@ export class ProjectRepository {
     const config = await this.loadWorkspaceConfig();
     config.instances[instanceName] ??= {
       grafanaUrl: "http://localhost:3000",
-      grafanaNamespace: "default",
       targets: {
         [DEFAULT_DEPLOYMENT_TARGET]: {},
       },
@@ -1539,6 +1517,10 @@ export class ProjectRepository {
     return filePath;
   }
 
+  async deleteDashboardRevisionSnapshot(entry: DashboardManifestEntry, revisionId: string): Promise<boolean> {
+    return removeFileIfExists(this.dashboardRevisionSnapshotPath(entry, revisionId));
+  }
+
   async deleteDashboardVersionHistory(entry: DashboardManifestEntry): Promise<string[]> {
     const removedPaths: string[] = [];
     const indexPath = this.dashboardVersionIndexPath(entry);
@@ -1569,7 +1551,11 @@ export class ProjectRepository {
     const dashboardKey = this.dashboardOverrideDashboardKey(entry);
     const targetKey = this.dashboardOverrideTargetKey(instanceName, targetName);
     current.dashboards[dashboardKey] ??= { targets: {} };
-    current.dashboards[dashboardKey]!.targets[targetKey] = overrideFile;
+    current.dashboards[dashboardKey]!.targets[targetKey] = normalizeDashboardTargetState(
+      overrideFile as unknown as Record<string, unknown>,
+      this.dashboardOverridesFilePath(entry),
+      targetKey,
+    );
     await this.saveDashboardOverridesFile(entry, current);
     return this.targetOverridePath(instanceName, targetName, entry);
   }

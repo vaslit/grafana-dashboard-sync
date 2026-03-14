@@ -27,7 +27,7 @@ function parseEnv(content) {
     return result;
 }
 function stringifyEnv(values) {
-    const preferredOrder = ["GRAFANA_URL", "GRAFANA_NAMESPACE"];
+    const preferredOrder = ["GRAFANA_URL"];
     const emitted = new Set();
     const lines = [];
     for (const key of preferredOrder) {

@@ -108,7 +108,6 @@ node_test_1.test.skip("deploy_dashboards.sh materializes dashboardUid for non-de
             instances: {
                 prod: {
                     grafanaUrl: "http://placeholder",
-                    grafanaNamespace: "default",
                     targets: {
                         default: {},
                         blue: {},
@@ -144,7 +143,6 @@ node_test_1.test.skip("deploy_dashboards.sh materializes dashboardUid for non-de
             const config = JSON.parse(await promises_1.default.readFile(workspaceConfigPath, "utf8"));
             config.instances.prod = {
                 grafanaUrl: baseUrl,
-                grafanaNamespace: "default",
                 targets: {
                     default: {},
                     blue: {},
@@ -187,7 +185,6 @@ node_test_1.test.skip("pull_dashboards.sh fetches target-specific uid and normal
             instances: {
                 prod: {
                     grafanaUrl: "http://placeholder",
-                    grafanaNamespace: "default",
                     targets: {
                         default: {},
                         blue: {},
@@ -236,7 +233,6 @@ node_test_1.test.skip("pull_dashboards.sh fetches target-specific uid and normal
             const config = JSON.parse(await promises_1.default.readFile(workspaceConfigPath, "utf8"));
             config.instances.prod = {
                 grafanaUrl: baseUrl,
-                grafanaNamespace: "default",
                 targets: {
                     default: {},
                     blue: {},

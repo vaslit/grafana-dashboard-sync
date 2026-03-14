@@ -72,10 +72,36 @@ const overrides_1 = require("../core/overrides");
     };
     const overrideFile = (0, overrides_1.generateOverrideFileFromDashboard)(dashboard);
     strict_1.default.deepEqual(overrideFile, {
-        variables: {
+        variableOverrides: {
             freeText: "abc",
             site: "nsk",
         },
+        datasourceBindings: {},
+    });
+});
+(0, node_test_1.test)("generateOverrideFileFromDashboard prefers constant query over stale current value", () => {
+    const dashboard = {
+        title: "Demo",
+        templating: {
+            list: [
+                {
+                    name: "siteConst",
+                    type: "constant",
+                    current: {
+                        text: "LUZ",
+                        value: "LUZ",
+                    },
+                    query: "LUZ1",
+                },
+            ],
+        },
+    };
+    const overrideFile = (0, overrides_1.generateOverrideFileFromDashboard)(dashboard);
+    strict_1.default.deepEqual(overrideFile, {
+        variableOverrides: {
+            siteConst: "LUZ1",
+        },
+        datasourceBindings: {},
     });
 });
 (0, node_test_1.test)("applyOverridesToDashboard rewrites current values for supported variables", () => {
@@ -124,11 +150,12 @@ const overrides_1 = require("../core/overrides");
         },
     };
     const rendered = (0, overrides_1.applyOverridesToDashboard)(dashboard, {
-        variables: {
+        variableOverrides: {
             site: "nsk",
             freeText: "new text",
             siteConst: "RND",
         },
+        datasourceBindings: {},
     });
     const list = (rendered.templating.list);
     const site = list.find((item) => item.name === "site");
@@ -167,9 +194,10 @@ const overrides_1 = require("../core/overrides");
         },
     };
     strict_1.default.throws(() => (0, overrides_1.applyOverridesToDashboard)(dashboard, {
-        variables: {
+        variableOverrides: {
             site: "LUZ",
         },
+        datasourceBindings: {},
     }), /is not available in custom variable "site"/);
 });
 //# sourceMappingURL=manifest-overrides.test.js.map

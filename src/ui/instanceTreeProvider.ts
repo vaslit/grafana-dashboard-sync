@@ -19,8 +19,8 @@ export class DevTargetTreeItem extends vscode.TreeItem {
     );
     this.iconPath = new vscode.ThemeIcon("server-environment");
     this.command = {
-      command: "grafanaDashboards.selectActiveInstance",
-      title: "Select Active Deployment Target",
+      command: "grafanaDashboards.selectDevTarget",
+      title: "Select Dev Target",
     };
   }
 }
@@ -143,9 +143,10 @@ export class InstanceTreeProvider implements vscode.TreeDataProvider<vscode.Tree
       }
 
       const instances = await repository.listInstances();
+      const devTarget = await repository.getDevTarget();
       if (instances.length === 0) {
         return [
-          new DevTargetTreeItem(this.getActiveTarget().instanceName, this.getActiveTarget().targetName),
+          new DevTargetTreeItem(devTarget?.instanceName, devTarget?.targetName),
           new InstancePlaceholderItem("Create an instance", {
             command: "grafanaDashboards.createInstance",
             title: "Create Instance",
@@ -159,7 +160,10 @@ export class InstanceTreeProvider implements vscode.TreeDataProvider<vscode.Tree
           return new InstanceTreeItem(instance, targets.length);
         }),
       );
-      return [new DevTargetTreeItem(this.getActiveTarget().instanceName, this.getActiveTarget().targetName), ...items];
+      return [
+        new DevTargetTreeItem(devTarget?.instanceName, devTarget?.targetName),
+        ...items,
+      ];
     } catch (error) {
       return [new InstancePlaceholderItem(`Instance error: ${String(error)}`)];
     }

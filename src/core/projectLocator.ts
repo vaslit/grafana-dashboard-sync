@@ -204,7 +204,7 @@ async function loadProjectConfig(configPath: string): Promise<ProjectConfigFile>
     throw new Error(`maxBackups in ${PROJECT_CONFIG_FILE} must be a positive integer when provided.`);
   }
 
-  if (config.version !== undefined && config.version !== 1 && config.version !== 2) {
+  if (config.version !== undefined && config.version !== 1 && config.version !== 2 && config.version !== 3 && config.version !== 4) {
     throw new Error(`Unsupported ${PROJECT_CONFIG_FILE} version: ${String(config.version)}.`);
   }
 

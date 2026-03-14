@@ -10,12 +10,16 @@ export interface DashboardManifest {
 
 export interface WorkspaceInstanceConfig {
   grafanaUrl?: string;
-  grafanaNamespace?: string;
   targets: Record<string, Record<string, never>>;
 }
 
+export interface WorkspaceDevTargetConfig {
+  instanceName: string;
+  targetName: string;
+}
+
 export interface WorkspaceProjectConfig {
-  version: 2;
+  version: 4;
   layout: {
     dashboardsDir: string;
     instancesDir?: string;
@@ -23,6 +27,7 @@ export interface WorkspaceProjectConfig {
     rendersDir: string;
     maxBackups: number;
   };
+  devTarget?: WorkspaceDevTargetConfig;
   dashboards: DashboardManifestEntry[];
   datasources: DatasourceCatalogFile["datasources"];
   instances: Record<string, WorkspaceInstanceConfig>;
@@ -42,17 +47,25 @@ export interface DashboardOverrideObject {
 
 export type DashboardOverrideValue = DashboardOverrideScalar | DashboardOverrideObject;
 
-export interface DashboardOverrideFile {
+export interface DashboardTargetRevisionState {
+  variableOverrides: Record<string, DashboardOverrideValue>;
+  datasourceBindings: Record<string, string>;
+}
+
+export interface DashboardTargetState {
+  currentRevisionId?: string;
   dashboardUid?: string;
   folderPath?: string;
-  variables: Record<string, DashboardOverrideValue>;
+  revisionStates: Record<string, DashboardTargetRevisionState>;
 }
+
+export type DashboardOverrideFile = DashboardTargetState;
 
 export interface DashboardFolderOverridesFile {
   dashboards: Record<
     string,
     {
-      targets: Record<string, DashboardOverrideFile>;
+      targets: Record<string, DashboardTargetState>;
     }
   >;
 }
@@ -139,7 +152,6 @@ export interface DeploymentTargetRecord {
 export interface EffectiveConnectionConfig {
   baseUrl: string;
   token: string;
-  namespace: string;
   sourceLabel: string;
 }
 
@@ -352,9 +364,12 @@ export interface DashboardRevisionListItem {
 export interface LiveTargetVersionStatus {
   instanceName: string;
   targetName: string;
+  storedRevisionId?: string;
   effectiveDashboardUid?: string;
+  effectiveFolderPath?: string;
   matchedRevisionId?: string;
-  state: "matched" | "unversioned" | "error";
+  datasourceStatus?: "complete" | "missing";
+  state: "matched" | "diverged" | "unversioned" | "error";
   detail?: string;
 }
 
@@ -379,4 +394,33 @@ export interface OverrideEditorVariableModel {
   savedOverride: string;
   hasSavedOverride: boolean;
   overrideOptions?: Array<{ label: string; value: string }>;
+}
+
+export interface TargetDatasourceBindingRow {
+  datasourceKey: string;
+  sourceLabel: string;
+  sourceType?: string;
+  usageCount?: number;
+  usageKinds?: Array<"panel" | "query" | "variable">;
+  globalDatasourceKey: string;
+  targetUid?: string;
+  targetName?: string;
+}
+
+export interface GlobalDatasourceUsageRow {
+  globalDatasourceKey: string;
+  sourceType?: string;
+  dashboards: string[];
+  instanceUid?: string;
+  instanceName?: string;
+}
+
+export interface TargetDashboardSummaryRow {
+  selectorName: string;
+  currentRevisionId?: string;
+  effectiveDashboardUid?: string;
+  effectiveFolderPath?: string;
+  datasourceStatus: "complete" | "missing";
+  liveStatus?: LiveTargetVersionStatus["state"];
+  liveMatchedRevisionId?: string;
 }

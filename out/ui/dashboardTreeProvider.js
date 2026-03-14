@@ -59,16 +59,16 @@ exports.DashboardTreeItem = DashboardTreeItem;
 class DashboardRevisionTreeItem extends vscode.TreeItem {
     record;
     revision;
-    isActiveTargetRevision;
-    constructor(record, revision, isActiveTargetRevision) {
+    isSelectedTargetRevision;
+    constructor(record, revision, isSelectedTargetRevision) {
         super(revision.record.id, vscode.TreeItemCollapsibleState.None);
         this.record = record;
         this.revision = revision;
-        this.isActiveTargetRevision = isActiveTargetRevision;
+        this.isSelectedTargetRevision = isSelectedTargetRevision;
         this.contextValue = "grafanaDashboardRevision";
         const badges = [
             revision.isCheckedOut ? "checked out" : undefined,
-            isActiveTargetRevision ? "on dev target" : undefined,
+            isSelectedTargetRevision ? "on active target" : undefined,
             revision.record.source.kind,
         ].filter(Boolean);
         this.description = badges.join(", ");
@@ -79,11 +79,11 @@ class DashboardRevisionTreeItem extends vscode.TreeItem {
             `Created: \`${revision.record.createdAt}\``,
             `Source: \`${revision.record.source.kind}\``,
             revision.isCheckedOut ? "Current checked out revision." : "",
-            isActiveTargetRevision ? "Matches the current dev target." : "",
+            isSelectedTargetRevision ? "Configured as the current revision on the active target." : "",
         ]
             .filter(Boolean)
             .join("\n"));
-        this.iconPath = new vscode.ThemeIcon(isActiveTargetRevision ? "radio-tower" : revision.isCheckedOut ? "check" : "history");
+        this.iconPath = new vscode.ThemeIcon(isSelectedTargetRevision ? "target" : revision.isCheckedOut ? "check" : "history");
     }
 }
 exports.DashboardRevisionTreeItem = DashboardRevisionTreeItem;

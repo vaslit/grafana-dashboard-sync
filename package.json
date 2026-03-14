@@ -2,7 +2,7 @@
   "name": "grafana-dashboard-sync",
   "displayName": "Grafana Dashboard Sync",
   "description": "Manage Grafana dashboards from VS Code with pull, render, deploy, backup, and datasource mapping workflows.",
-  "version": "0.7.0",
+  "version": "0.8.10",
   "publisher": "vaslit",
   "license": "MIT",
   "repository": {
@@ -39,11 +39,17 @@
     "onCommand:grafanaDashboards.refresh",
     "onCommand:grafanaDashboards.initializeProject",
     "onCommand:grafanaDashboards.selectActiveInstance",
+    "onCommand:grafanaDashboards.selectDevTarget",
     "onCommand:grafanaDashboards.createDeploymentTarget",
     "onCommand:grafanaDashboards.removeDeploymentTarget",
     "onCommand:grafanaDashboards.pickPlacementFolder",
     "onCommand:grafanaDashboards.setInstanceToken",
     "onCommand:grafanaDashboards.clearInstanceToken",
+    "onCommand:grafanaDashboards.checkoutRevisionFromTree",
+    "onCommand:grafanaDashboards.setTargetRevisionFromTree",
+    "onCommand:grafanaDashboards.deployRevisionToActiveTargetFromTree",
+    "onCommand:grafanaDashboards.deleteRevisionFromTree",
+    "onCommand:grafanaDashboards.openDashboardInBrowser",
     "onCommand:grafanaDashboards.createBackup",
     "onCommand:grafanaDashboards.createAllDashboardsBackup",
     "onCommand:grafanaDashboards.restoreBackup",
@@ -101,12 +107,32 @@
         "title": "Select Active Deployment Target"
       },
       {
+        "command": "grafanaDashboards.selectDevTarget",
+        "title": "Select Dev Target"
+      },
+      {
         "command": "grafanaDashboards.setInstanceToken",
         "title": "Set Instance Token"
       },
       {
         "command": "grafanaDashboards.clearInstanceToken",
         "title": "Clear Instance Token"
+      },
+      {
+        "command": "grafanaDashboards.checkoutRevisionFromTree",
+        "title": "Checkout Revision"
+      },
+      {
+        "command": "grafanaDashboards.setTargetRevisionFromTree",
+        "title": "Set Revision On Active Target"
+      },
+      {
+        "command": "grafanaDashboards.deployRevisionToActiveTargetFromTree",
+        "title": "Deploy Revision To Active Target"
+      },
+      {
+        "command": "grafanaDashboards.deleteRevisionFromTree",
+        "title": "Delete Revision"
       },
       {
         "command": "grafanaDashboards.createBackup",
@@ -162,7 +188,7 @@
       },
       {
         "command": "grafanaDashboards.pullDashboard",
-        "title": "Pull Dashboard From Target",
+        "title": "Pull Dashboard From Dev Target",
         "icon": {
           "light": "media/pull-light.svg",
           "dark": "media/pull-dark.svg"
@@ -179,6 +205,10 @@
       {
         "command": "grafanaDashboards.openDashboardJson",
         "title": "Open Dashboard JSON"
+      },
+      {
+        "command": "grafanaDashboards.openDashboardInBrowser",
+        "title": "Open Dashboard In Browser"
       },
       {
         "command": "grafanaDashboards.removeDashboard",
@@ -256,6 +286,11 @@
           "group": "manage@2"
         },
         {
+          "command": "grafanaDashboards.selectDevTarget",
+          "when": "view == grafanaDashboards.instances",
+          "group": "manage@2.5"
+        },
+        {
           "command": "grafanaDashboards.renderAllInstances",
           "when": "view == grafanaDashboards.instances",
           "group": "manage@3"
@@ -308,6 +343,11 @@
           "group": "navigation"
         },
         {
+          "command": "grafanaDashboards.openDashboardInBrowser",
+          "when": "view == grafanaDashboards.dashboards && viewItem == grafanaDashboard",
+          "group": "navigation@0.5"
+        },
+        {
           "command": "grafanaDashboards.pullDashboard",
           "when": "view == grafanaDashboards.dashboards && viewItem == grafanaDashboard",
           "group": "navigation@1"
@@ -338,7 +378,27 @@
           "group": "navigation@10"
         },
         {
-          "command": "grafanaDashboards.selectActiveInstance",
+          "command": "grafanaDashboards.checkoutRevisionFromTree",
+          "when": "view == grafanaDashboards.dashboards && viewItem == grafanaDashboardRevision",
+          "group": "navigation@1"
+        },
+        {
+          "command": "grafanaDashboards.setTargetRevisionFromTree",
+          "when": "view == grafanaDashboards.dashboards && viewItem == grafanaDashboardRevision",
+          "group": "navigation@2"
+        },
+        {
+          "command": "grafanaDashboards.deployRevisionToActiveTargetFromTree",
+          "when": "view == grafanaDashboards.dashboards && viewItem == grafanaDashboardRevision",
+          "group": "navigation@3"
+        },
+        {
+          "command": "grafanaDashboards.deleteRevisionFromTree",
+          "when": "view == grafanaDashboards.dashboards && viewItem == grafanaDashboardRevision",
+          "group": "navigation@10"
+        },
+        {
+          "command": "grafanaDashboards.selectDevTarget",
           "when": "view == grafanaDashboards.instances && viewItem == grafanaDevTargetSelector",
           "group": "navigation"
         },
@@ -386,6 +446,11 @@
           "command": "grafanaDashboards.openDashboardJson",
           "when": "view == grafanaDashboards.instances && viewItem == grafanaInstanceDashboard",
           "group": "navigation"
+        },
+        {
+          "command": "grafanaDashboards.openDashboardInBrowser",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstanceDashboard",
+          "group": "navigation@0.5"
         },
         {
           "command": "grafanaDashboards.pullDashboard",

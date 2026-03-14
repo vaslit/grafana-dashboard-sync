@@ -29,12 +29,10 @@ async function withTempProject(run) {
         await repository.createInstance("prod");
         await repository.saveInstanceEnvValues("prod", {
             GRAFANA_URL: "http://prod",
-            GRAFANA_NAMESPACE: "team-a",
         });
         const connection = await repositoryWithSecret.loadConnectionConfig("prod");
         strict_1.default.equal(connection.baseUrl, "http://prod");
         strict_1.default.equal(connection.token, "root-token");
-        strict_1.default.equal(connection.namespace, "team-a");
         strict_1.default.equal(connection.sourceLabel, ".grafana-dashboard-workspace.json -> instances.prod");
     });
 });
@@ -69,7 +67,7 @@ async function withTempProject(run) {
         strict_1.default.equal(repository.folderMetaPathForEntry(entry), node_path_1.default.join(repository.dashboardsDir, "integration", ".folder.json"));
     });
 });
-(0, node_test_1.test)("migrateDeploymentTargets moves legacy flat overrides into targets/default", async () => {
+(0, node_test_1.test)("migrateDeploymentTargets is disabled for version 4 projects", async () => {
     await withTempProject(async (_rootPath, repository) => {
         const entry = {
             name: "sync-status",
@@ -84,9 +82,8 @@ async function withTempProject(run) {
             },
         });
         const changed = await repository.migrateDeploymentTargets();
-        strict_1.default.equal(changed, true);
-        strict_1.default.deepEqual((await repository.loadWorkspaceConfig()).instances.prod.targets.default, {});
-        strict_1.default.equal(await repository.readTextFileIfExists(repository.dashboardOverridesFilePath(entry)), "{\n  \"dashboards\": {\n    \"uid-1\": {\n      \"targets\": {\n        \"prod/default\": {\n          \"variables\": {\n            \"site\": \"rnd\"\n          }\n        }\n      }\n    }\n  }\n}\n");
+        strict_1.default.equal(changed, false);
+        strict_1.default.equal(await repository.readTextFileIfExists(repository.dashboardOverridesFilePath(entry)), undefined);
     });
 });
 (0, node_test_1.test)("saveTargetOverrideFile rejects dashboardUid on default target", async () => {
@@ -100,7 +97,7 @@ async function withTempProject(run) {
         await repository.createInstance("prod");
         await strict_1.default.rejects(repository.saveTargetOverrideFile("prod", "default", entry, {
             dashboardUid: "not-allowed",
-            variables: {},
+            revisionStates: {},
         }), /Invalid dashboard overrides file/);
     });
 });
@@ -116,15 +113,20 @@ async function withTempProject(run) {
         await repository.createDeploymentTarget("prod", "blue");
         await repository.saveTargetOverrideFile("prod", "blue", entry, {
             dashboardUid: "uid-blue",
-            variables: {
-                site: "rnd",
+            revisionStates: {
+                rev1: {
+                    variableOverrides: {
+                        site: "rnd",
+                    },
+                    datasourceBindings: {},
+                },
             },
         });
         await repository.updateManifestEntry("sync-status", {
             ...entry,
             uid: "uid-2",
         });
-        strict_1.default.equal(await repository.readTextFileIfExists(repository.dashboardOverridesFilePath({ ...entry, uid: "uid-2" })), "{\n  \"dashboards\": {\n    \"uid-2\": {\n      \"targets\": {\n        \"prod/blue\": {\n          \"dashboardUid\": \"uid-blue\",\n          \"variables\": {\n            \"site\": \"rnd\"\n          }\n        }\n      }\n    }\n  }\n}\n");
+        strict_1.default.equal(await repository.readTextFileIfExists(repository.dashboardOverridesFilePath({ ...entry, uid: "uid-2" })), "{\n  \"dashboards\": {\n    \"uid-2\": {\n      \"targets\": {\n        \"prod/blue\": {\n          \"dashboardUid\": \"uid-blue\",\n          \"revisionStates\": {\n            \"rev1\": {\n              \"datasourceBindings\": {},\n              \"variableOverrides\": {\n                \"site\": \"rnd\"\n              }\n            }\n          }\n        }\n      }\n    }\n  }\n}\n");
     });
 });
 (0, node_test_1.test)("listInstances does not create instances directory during read-only access", async () => {
@@ -144,12 +146,10 @@ async function withTempProject(run) {
         await repository.createInstance("prod");
         await repository.saveInstanceEnvValues("prod", {
             GRAFANA_URL: "http://prod",
-            GRAFANA_NAMESPACE: "team-a",
             GRAFANA_TOKEN: "should-not-be-written",
         });
         strict_1.default.deepEqual((await repository.loadWorkspaceConfig()).instances.prod, {
             grafanaUrl: "http://prod",
-            grafanaNamespace: "team-a",
             targets: {
                 default: {},
             },
@@ -185,9 +185,7 @@ async function withTempProject(run) {
         });
         await repository.createInstance("prod");
         await repository.saveOverrideFile("prod", entry, {
-            variables: {
-                site: "nsk",
-            },
+            revisionStates: {},
         });
         await repository.saveDatasourceCatalog({
             datasources: {
@@ -235,7 +233,6 @@ async function withTempProject(run) {
         await repository.createInstance("prod");
         await repository.saveInstanceEnvValues("prod", {
             GRAFANA_URL: "http://prod",
-            GRAFANA_NAMESPACE: "team-a",
         });
         await repository.saveDatasourceCatalog({
             datasources: {
@@ -250,9 +247,7 @@ async function withTempProject(run) {
             },
         });
         await repository.saveOverrideFile("prod", entry, {
-            variables: {
-                site: "nsk",
-            },
+            revisionStates: {},
         });
         const backup = await repository.createBackupSnapshot("dashboard", [
             {
