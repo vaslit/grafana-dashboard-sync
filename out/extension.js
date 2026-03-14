@@ -95,7 +95,6 @@ function datasourceSelectionsFromFormValues(values, prefix) {
 async function activate(context) {
     const workspaceRoot = workspaceRootPath();
     const output = vscode.window.createOutputChannel("Grafana Dashboards");
-    const activeInstanceStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     const secretStorage = new instanceSecretStorage_1.InstanceSecretStorage(context.secrets);
     const log = {
         info(message) {
@@ -122,41 +121,27 @@ async function activate(context) {
         return service;
     };
     const activeTargetStorageKey = (projectRootPath) => `grafanaDashboards.activeTarget:${projectRootPath}`;
-    const updateStatusBar = () => {
-        if (!repository) {
-            activeInstanceStatusBar.text = "$(warning) Grafana: no project";
-            activeInstanceStatusBar.tooltip = missingProjectMessage();
-            activeInstanceStatusBar.command = "grafanaDashboards.initializeProject";
-            activeInstanceStatusBar.show();
-            return;
-        }
-        const activeInstanceName = selectionState.selectedInstanceName;
-        const activeTargetName = selectionState.selectedTargetName;
-        activeInstanceStatusBar.text = activeInstanceName && activeTargetName
-            ? `$(server-environment) Grafana: ${activeInstanceName}/${activeTargetName}`
-            : "$(circle-slash) Grafana: no target";
-        activeInstanceStatusBar.tooltip = activeInstanceName && activeTargetName
-            ? `Active deployment target: ${activeInstanceName}/${activeTargetName}\nClick to switch.`
-            : "No active deployment target selected.\nClick to choose one.";
-        activeInstanceStatusBar.command = "grafanaDashboards.selectActiveInstance";
-        activeInstanceStatusBar.show();
+    const currentDevTarget = () => ({
+        instanceName: selectionState.activeInstanceName,
+        targetName: selectionState.activeTargetName,
+    });
+    const dashboardHeaderDescription = () => {
+        const { instanceName, targetName } = currentDevTarget();
+        return instanceName && targetName ? `dev target: ${instanceName}/${targetName}` : "dev target: none";
     };
     const syncActiveInstance = async () => {
         if (!repository) {
-            selectionState.setInstance(undefined);
-            selectionState.setTarget(undefined);
-            updateStatusBar();
+            selectionState.setActiveTarget(undefined, undefined);
             return;
         }
-        const currentInstanceName = selectionState.selectedInstanceName;
-        const currentTargetName = selectionState.selectedTargetName;
+        const currentInstanceName = selectionState.activeInstanceName;
+        const currentTargetName = selectionState.activeTargetName;
         if (currentInstanceName && currentTargetName) {
             const currentInstance = await repository.instanceByName(currentInstanceName);
             const currentTarget = currentInstance
                 ? await repository.deploymentTargetByName(currentInstanceName, currentTargetName)
                 : undefined;
             if (currentInstance && currentTarget) {
-                updateStatusBar();
                 return;
             }
         }
@@ -168,23 +153,18 @@ async function activate(context) {
                 ? await repository.deploymentTargetByName(storedInstance.name, storedTargetName)
                 : undefined;
             if (storedInstance && storedTarget) {
-                selectionState.setInstance(storedInstance.name);
-                selectionState.setTarget(storedTarget.name);
-                updateStatusBar();
+                selectionState.setActiveTarget(storedInstance.name, storedTarget.name);
                 return;
             }
         }
         const instances = await repository.listInstances();
         if (instances.length === 1) {
             const defaultTarget = await repository.deploymentTargetByName(instances[0].name, repository_1.DEFAULT_DEPLOYMENT_TARGET);
-            selectionState.setInstance(instances[0].name);
-            selectionState.setTarget(defaultTarget?.name);
+            selectionState.setActiveTarget(instances[0].name, defaultTarget?.name);
         }
         else {
-            selectionState.setInstance(undefined);
-            selectionState.setTarget(undefined);
+            selectionState.setActiveTarget(undefined, undefined);
         }
-        updateStatusBar();
     };
     const resolveProject = async () => {
         const layout = await (0, projectLocator_1.discoverProjectLayout)(workspaceRoot);
@@ -212,12 +192,13 @@ async function activate(context) {
         await syncActiveInstance();
     };
     await resolveProject();
-    const dashboardsProvider = new dashboardTreeProvider_1.DashboardTreeProvider(() => repository, missingProjectMessage);
-    const instancesProvider = new instanceTreeProvider_1.InstanceTreeProvider(() => repository, missingProjectMessage);
+    const dashboardsProvider = new dashboardTreeProvider_1.DashboardTreeProvider(() => repository, () => service, currentDevTarget, missingProjectMessage);
+    const instancesProvider = new instanceTreeProvider_1.InstanceTreeProvider(() => repository, currentDevTarget, missingProjectMessage);
     const backupsProvider = new backupTreeProvider_1.BackupTreeProvider(() => repository, missingProjectMessage);
     const dashboardTreeView = vscode.window.createTreeView("grafanaDashboards.dashboards", {
         treeDataProvider: dashboardsProvider,
     });
+    dashboardTreeView.description = dashboardHeaderDescription();
     const instanceTreeView = vscode.window.createTreeView("grafanaDashboards.instances", {
         treeDataProvider: instancesProvider,
     });
@@ -228,10 +209,11 @@ async function activate(context) {
     const folderPickerPanel = new folderPickerPanel_1.FolderPickerPanel();
     const refreshAll = async () => {
         await syncActiveInstance();
+        dashboardsProvider.clearTargetRevisionCache();
         dashboardsProvider.refresh();
         instancesProvider.refresh();
         backupsProvider.refresh();
-        updateStatusBar();
+        dashboardTreeView.description = dashboardHeaderDescription();
         await detailsProvider.refresh();
     };
     const actionHandlers = {
@@ -606,15 +588,13 @@ async function activate(context) {
             const service = requireService();
             const record = await requireDashboardRecord(selectorName);
             selectionState.setDashboard(selectorName);
-            selectionState.setInstance(instanceName);
-            selectionState.setTarget(targetName);
+            selectionState.setActiveTarget(instanceName, targetName);
             const summary = await service.pullDashboards([record.entry], instanceName, targetName);
             await refreshAll();
             void vscode.window.showInformationMessage(`Pull complete: ${summary.updatedCount} updated, ${summary.skippedCount} unchanged from ${instanceName}/${targetName}.`);
         },
         setActiveTarget: async (instanceName, targetName) => {
-            selectionState.setInstance(instanceName);
-            selectionState.setTarget(targetName);
+            selectionState.setActiveTarget(instanceName, targetName);
             await refreshAll();
         },
         pullSelected: async () => {
@@ -692,7 +672,7 @@ async function activate(context) {
             const picks = [
                 ...targets.map((target) => ({
                     label: `${target.instanceName}/${target.name}`,
-                    description: target.instanceName === selectionState.selectedInstanceName && target.name === selectionState.selectedTargetName
+                    description: target.instanceName === selectionState.activeInstanceName && target.name === selectionState.activeTargetName
                         ? "Active"
                         : undefined,
                     action: "select",
@@ -727,12 +707,10 @@ async function activate(context) {
                 return;
             }
             if (selection.action === "clear") {
-                selectionState.setInstance(undefined);
-                selectionState.setTarget(undefined);
+                selectionState.setActiveTarget(undefined, undefined);
                 return;
             }
-            selectionState.setInstance(selection.instanceName);
-            selectionState.setTarget(selection.targetName);
+            selectionState.setActiveTarget(selection.instanceName, selection.targetName);
         },
     };
     detailsProvider = new detailsViewProvider_1.DetailsViewProvider(() => repository, () => service, selectionState, actionHandlers, missingProjectMessage);
@@ -741,42 +719,36 @@ async function activate(context) {
         if (item instanceof dashboardTreeProvider_1.DashboardTreeItem) {
             selectionState.setDetailsMode("dashboard");
             selectionState.setDashboard(item.record.selectorName);
+            dashboardsProvider.clearTargetRevisionCache();
+            dashboardsProvider.refresh();
             instancesProvider.refresh();
             void detailsProvider.refresh();
         }
-        else if (item instanceof dashboardTreeProvider_1.DashboardInstanceTreeItem) {
+        else if (item instanceof dashboardTreeProvider_1.DashboardRevisionTreeItem) {
             selectionState.setDetailsMode("dashboard");
             selectionState.setDashboard(item.record.selectorName);
-            selectionState.setInstance(item.instance.name);
-            void repository?.deploymentTargetByName(item.instance.name, repository_1.DEFAULT_DEPLOYMENT_TARGET).then((target) => {
-                selectionState.setTarget(target?.name);
-            });
-            instancesProvider.refresh();
-            void detailsProvider.refresh();
-        }
-        else if (item instanceof dashboardTreeProvider_1.DashboardTargetTreeItem) {
-            selectionState.setDetailsMode("dashboard");
-            selectionState.setDashboard(item.record.selectorName);
-            selectionState.setInstance(item.target.instanceName);
-            selectionState.setTarget(item.target.name);
+            dashboardsProvider.refresh();
             instancesProvider.refresh();
             void detailsProvider.refresh();
         }
     });
     const instanceSelectionDisposable = instanceTreeView.onDidChangeSelection((event) => {
         const item = event.selection[0];
+        if (item instanceof instanceTreeProvider_1.DevTargetTreeItem) {
+            return;
+        }
         if (item instanceof instanceTreeProvider_1.InstanceTreeItem) {
             selectionState.setDetailsMode("instance");
             selectionState.setInstance(item.instance.name);
-            void repository?.deploymentTargetByName(item.instance.name, repository_1.DEFAULT_DEPLOYMENT_TARGET).then((target) => {
-                selectionState.setTarget(target?.name);
-            });
             void detailsProvider.refresh();
         }
         else if (item instanceof instanceTreeProvider_1.DeploymentTargetTreeItem) {
             selectionState.setDetailsMode("instance");
             selectionState.setInstance(item.target.instanceName);
             selectionState.setTarget(item.target.name);
+            selectionState.setActiveTarget(item.target.instanceName, item.target.name);
+            dashboardsProvider.clearTargetRevisionCache();
+            dashboardsProvider.refresh();
             void detailsProvider.refresh();
         }
         else if (item instanceof instanceTreeProvider_1.InstanceTargetDashboardTreeItem) {
@@ -784,6 +756,9 @@ async function activate(context) {
             selectionState.setDashboard(item.record.selectorName);
             selectionState.setInstance(item.target.instanceName);
             selectionState.setTarget(item.target.name);
+            selectionState.setActiveTarget(item.target.instanceName, item.target.name);
+            dashboardsProvider.clearTargetRevisionCache();
+            dashboardsProvider.refresh();
             void detailsProvider.refresh();
         }
     });
@@ -799,15 +774,17 @@ async function activate(context) {
     });
     const selectionStateDisposable = selectionState.onDidChange(() => {
         if (repository) {
-            void context.workspaceState.update(activeTargetStorageKey(repository.projectRootPath), selectionState.selectedInstanceName && selectionState.selectedTargetName
-                ? `${selectionState.selectedInstanceName}/${selectionState.selectedTargetName}`
+            void context.workspaceState.update(activeTargetStorageKey(repository.projectRootPath), selectionState.activeInstanceName && selectionState.activeTargetName
+                ? `${selectionState.activeInstanceName}/${selectionState.activeTargetName}`
                 : undefined);
         }
+        dashboardTreeView.description = dashboardHeaderDescription();
+        dashboardsProvider.clearTargetRevisionCache();
+        dashboardsProvider.refresh();
         instancesProvider.refresh();
-        updateStatusBar();
         void detailsProvider.refresh();
     });
-    context.subscriptions.push(output, activeInstanceStatusBar, dashboardTreeView, instanceTreeView, backupTreeView, dashboardSelectionDisposable, instanceSelectionDisposable, backupSelectionDisposable, selectionStateDisposable, vscode.window.registerWebviewViewProvider("grafanaDashboards.details", detailsProvider), vscode.commands.registerCommand("grafanaDashboards.initializeProject", () => actionHandlers.initializeProject()), vscode.commands.registerCommand("grafanaDashboards.createBackup", (item) => createBackupCommand(item)), vscode.commands.registerCommand("grafanaDashboards.createAllDashboardsBackup", () => createAllDashboardsBackupCommand()), vscode.commands.registerCommand("grafanaDashboards.restoreBackup", (item) => restoreBackupCommand(item)), vscode.commands.registerCommand("grafanaDashboards.openBackupFolder", (item) => openBackupFolder(item)), vscode.commands.registerCommand("grafanaDashboards.deleteBackup", (item) => deleteBackup(item)), vscode.commands.registerCommand("grafanaDashboards.selectActiveInstance", () => actionHandlers.selectActiveInstance()), vscode.commands.registerCommand("grafanaDashboards.refresh", async () => {
+    context.subscriptions.push(output, dashboardTreeView, instanceTreeView, backupTreeView, dashboardSelectionDisposable, instanceSelectionDisposable, backupSelectionDisposable, selectionStateDisposable, vscode.window.registerWebviewViewProvider("grafanaDashboards.details", detailsProvider), vscode.commands.registerCommand("grafanaDashboards.initializeProject", () => actionHandlers.initializeProject()), vscode.commands.registerCommand("grafanaDashboards.createBackup", (item) => createBackupCommand(item)), vscode.commands.registerCommand("grafanaDashboards.createAllDashboardsBackup", () => createAllDashboardsBackupCommand()), vscode.commands.registerCommand("grafanaDashboards.restoreBackup", (item) => restoreBackupCommand(item)), vscode.commands.registerCommand("grafanaDashboards.openBackupFolder", (item) => openBackupFolder(item)), vscode.commands.registerCommand("grafanaDashboards.deleteBackup", (item) => deleteBackup(item)), vscode.commands.registerCommand("grafanaDashboards.selectActiveInstance", () => actionHandlers.selectActiveInstance()), vscode.commands.registerCommand("grafanaDashboards.refresh", async () => {
         await resolveProject();
         await refreshAll();
     }), vscode.commands.registerCommand("grafanaDashboards.createManifestFromExample", () => actionHandlers.createManifestFromExample()), vscode.commands.registerCommand("grafanaDashboards.addDashboard", () => actionHandlers.addDashboard()), vscode.commands.registerCommand("grafanaDashboards.createInstance", () => actionHandlers.createInstance("")), vscode.commands.registerCommand("grafanaDashboards.createDeploymentTarget", (item) => actionHandlers.createDeploymentTarget(typeof item === "string"
@@ -871,31 +848,13 @@ async function activate(context) {
         return backup;
     }
     function isDashboardScopeItem(item) {
-        return item instanceof dashboardTreeProvider_1.DashboardTreeItem || item instanceof dashboardTreeProvider_1.DashboardInstanceTreeItem || item instanceof dashboardTreeProvider_1.DashboardTargetTreeItem;
+        return item instanceof dashboardTreeProvider_1.DashboardTreeItem;
     }
     function isInstanceTargetDashboardItem(item) {
         return item instanceof instanceTreeProvider_1.InstanceTargetDashboardTreeItem;
     }
     async function dashboardScopeContext(item) {
         const repository = requireRepository();
-        if (item instanceof dashboardTreeProvider_1.DashboardTargetTreeItem) {
-            return {
-                record: item.record,
-                targets: [item.target],
-                label: `${item.record.selectorName} on ${item.target.instanceName}/${item.target.name}`,
-            };
-        }
-        if (item instanceof dashboardTreeProvider_1.DashboardInstanceTreeItem) {
-            const targets = await repository.listDeploymentTargets(item.instance.name);
-            if (targets.length === 0) {
-                throw new Error(`No deployment targets found for ${item.instance.name}.`);
-            }
-            return {
-                record: item.record,
-                targets,
-                label: `${item.record.selectorName} on ${item.instance.name}`,
-            };
-        }
         const targets = await repository.listAllDeploymentTargets();
         if (targets.length === 0) {
             throw new Error("No deployment targets available.");
@@ -912,9 +871,7 @@ async function activate(context) {
             label: `${target.instanceName}/${target.name}`,
             target,
         })), {
-            title: item instanceof dashboardTreeProvider_1.DashboardInstanceTreeItem
-                ? `Choose source target for ${record.selectorName} in ${item.instance.name}`
-                : `Choose source target for ${record.selectorName}`,
+            title: `Choose source target for ${record.selectorName}`,
             placeHolder: "Pull should use one concrete Grafana target as the source of truth",
         });
         if (!selection) {
@@ -1001,31 +958,6 @@ async function activate(context) {
                 label: `${item.record.selectorName} across all instances`,
             };
         }
-        if (item instanceof dashboardTreeProvider_1.DashboardInstanceTreeItem) {
-            const targets = await repository.listDeploymentTargets(item.instance.name);
-            return {
-                scope: "instance",
-                specs: targets.map((target) => ({
-                    instanceName: target.instanceName,
-                    targetName: target.name,
-                    entries: [item.record.entry],
-                })),
-                label: `${item.record.selectorName} in ${item.instance.name}`,
-            };
-        }
-        if (item instanceof dashboardTreeProvider_1.DashboardTargetTreeItem) {
-            return {
-                scope: "dashboard",
-                specs: [
-                    {
-                        instanceName: item.target.instanceName,
-                        targetName: item.target.name,
-                        entries: [item.record.entry],
-                    },
-                ],
-                label: `${item.record.selectorName} on ${item.target.instanceName}/${item.target.name}`,
-            };
-        }
         if (item instanceof instanceTreeProvider_1.InstanceTreeItem) {
             const entries = await allDashboardEntries();
             const targets = await repository.listDeploymentTargets(item.instance.name);
@@ -1093,8 +1025,8 @@ async function activate(context) {
         if (explicitInstanceName) {
             return requireInstance(explicitInstanceName);
         }
-        if (selectionState.selectedInstanceName) {
-            return requireInstance(selectionState.selectedInstanceName);
+        if (selectionState.activeInstanceName) {
+            return requireInstance(selectionState.activeInstanceName);
         }
         const instances = await repository.listInstances();
         const picks = instances.map((instance) => ({
@@ -1122,8 +1054,8 @@ async function activate(context) {
         if (explicitInstanceName && explicitTargetName) {
             return requireDeploymentTarget(explicitInstanceName, explicitTargetName);
         }
-        if (selectionState.selectedInstanceName && selectionState.selectedTargetName) {
-            return requireDeploymentTarget(selectionState.selectedInstanceName, selectionState.selectedTargetName);
+        if (selectionState.activeInstanceName && selectionState.activeTargetName) {
+            return requireDeploymentTarget(selectionState.activeInstanceName, selectionState.activeTargetName);
         }
         const targets = await repository.listAllDeploymentTargets();
         if (targets.length === 0) {
@@ -1162,13 +1094,7 @@ async function activate(context) {
     async function pullDashboards(item) {
         const service = requireService();
         if (isDashboardScopeItem(item)) {
-            const scopedTarget = item instanceof dashboardTreeProvider_1.DashboardTargetTreeItem
-                ? {
-                    record: item.record,
-                    target: item.target,
-                    label: `${item.record.selectorName} from ${item.target.instanceName}/${item.target.name}`,
-                }
-                : await pickDashboardSourceTarget(item);
+            const scopedTarget = await pickDashboardSourceTarget(item);
             const summary = await service.pullDashboards([scopedTarget.record.entry], scopedTarget.target.instanceName, scopedTarget.target.name);
             await refreshAll();
             void vscode.window.showInformationMessage(`Pull complete for ${scopedTarget.label}: ${summary.updatedCount} updated, ${summary.skippedCount} unchanged.`);

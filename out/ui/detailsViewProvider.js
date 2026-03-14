@@ -133,31 +133,25 @@ class DetailsViewProvider {
         const detailsMode = this.selectionState.selectedDetailsMode ??
             (this.selectionState.selectedDashboardSelectorName ? "dashboard" : this.selectionState.selectedInstanceName ? "instance" : undefined);
         const manifestExists = await repository.manifestExists();
+        const dashboardInstanceName = detailsMode === "dashboard" ? this.selectionState.activeInstanceName : this.selectionState.selectedInstanceName;
+        const dashboardTargetName = detailsMode === "dashboard" ? this.selectionState.activeTargetName : this.selectionState.selectedTargetName;
         const dashboard = detailsMode === "dashboard" && this.selectionState.selectedDashboardSelectorName
             ? await repository.loadDashboardDetails(this.selectionState.selectedDashboardSelectorName)
             : undefined;
-        const instance = this.selectionState.selectedInstanceName
-            ? await repository.loadInstanceDetails(this.selectionState.selectedInstanceName)
+        const instance = dashboardInstanceName
+            ? await repository.loadInstanceDetails(dashboardInstanceName)
             : undefined;
-        const target = detailsMode === "dashboard" && instance && this.selectionState.selectedTargetName
-            ? await repository.loadDeploymentTargetDetails(instance.instance.name, this.selectionState.selectedTargetName)
+        const target = detailsMode === "dashboard" && instance && dashboardTargetName
+            ? await repository.loadDeploymentTargetDetails(instance.instance.name, dashboardTargetName)
             : undefined;
         let datasourceOptions = [];
         let datasourceLoadError;
-        let folderPathOptions = [];
-        let folderPathLoadError;
         if (instance) {
             try {
                 datasourceOptions = await service.listRemoteDatasources(instance.instance.name);
             }
             catch (error) {
                 datasourceLoadError = String(error);
-            }
-            try {
-                folderPathOptions = await service.listRemoteFolderPaths(instance.instance.name);
-            }
-            catch (error) {
-                folderPathLoadError = String(error);
             }
         }
         const instanceDatasourceRows = detailsMode === "instance" && instance
@@ -265,13 +259,13 @@ class DetailsViewProvider {
 </head>
 <body>
   ${this.renderManifestSection(manifestExists)}
-  ${this.renderDashboardSection(dashboard)}
-  ${this.renderRevisionSection(dashboard, revisions, instance, target)}
-  ${this.renderLiveTargetVersionsSection(dashboard, liveTargetVersions)}
+  ${detailsMode === "dashboard" ? this.renderDashboardSection(dashboard) : ""}
+  ${detailsMode === "dashboard" ? this.renderRevisionSection(dashboard, revisions, instance, target) : ""}
+  ${detailsMode === "dashboard" ? this.renderLiveTargetVersionsSection(dashboard, liveTargetVersions) : ""}
   ${detailsMode === "instance" ? this.renderInstanceSection(instance, target) : ""}
   ${this.renderDatasourceSection(dashboard, instance, target, datasourceRows, datasourceOptions, datasourceLoadError, detailsMode, instanceDatasourceRows)}
-  ${this.renderPlacementSection(dashboard, instance, target, placement, folderPathOptions, folderPathLoadError)}
-  ${this.renderOverrideSection(dashboard, instance, target, overrideVariables)}
+  ${detailsMode === "dashboard" ? this.renderPlacementSection(dashboard, instance, target, placement) : ""}
+  ${detailsMode === "dashboard" ? this.renderOverrideSection(dashboard, instance, target, overrideVariables) : ""}
   <script nonce="${scriptNonce}">
     const vscode = acquireVsCodeApi();
 
@@ -884,16 +878,13 @@ class DetailsViewProvider {
       </form>
     </section>`;
     }
-    renderPlacementSection(dashboard, instance, target, placement, folderPathOptions = [], folderPathLoadError) {
+    renderPlacementSection(dashboard, instance, target, placement) {
         if (!dashboard || !instance || !target) {
             return "";
         }
         const inputId = "placement-folder-path";
         const checked = placement?.overrideFolderPath ? ' checked="checked"' : "";
         const value = placement?.overrideFolderPath ?? placement?.baseFolderPath ?? "";
-        const loadError = folderPathLoadError !== undefined
-            ? `<div class="hint">Could not load folder paths from Grafana for <strong>${escapeHtml(instance.instance.name)}</strong>: ${escapeHtml(folderPathLoadError)}</div>`
-            : "";
         return `<section data-collapsible-section="placement">
       <h2>Placement</h2>
       <div class="hint">Configure server folder placement for <strong>${escapeHtml(instance.instance.name)}/${escapeHtml(target.target.name)}</strong>.</div>
@@ -901,8 +892,6 @@ class DetailsViewProvider {
       <div class="small">Target dashboard UID: ${escapeHtml(placement?.overrideDashboardUid ?? (target.target.name === "default" ? "(not used for default)" : "(will be generated on deploy/pull)"))}</div>
       <div class="small">Effective dashboard UID: ${escapeHtml(placement?.effectiveDashboardUid ?? (target.target.name === "default" ? dashboard.entry.uid : "(pending generation)"))}</div>
       <div class="small">Base folder path: ${escapeHtml(placement?.baseFolderPath ?? "(root)")}</div>
-      <div class="small">Available server folders: ${escapeHtml(String(folderPathOptions.length))}</div>
-      ${loadError}
       <form id="placement-form" class="grid">
         <div style="display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center;">
           <input

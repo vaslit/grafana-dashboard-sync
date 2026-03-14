@@ -347,6 +347,13 @@ class DashboardService {
             return instanceOrder !== 0 ? instanceOrder : left.targetName.localeCompare(right.targetName);
         });
     }
+    async matchedRevisionIdForTarget(entry, instanceName, targetName) {
+        const index = await this.ensureDashboardVersionIndex(entry);
+        const managedVariableNames = await this.managedVariableNames(entry);
+        const { snapshot } = await this.liveTargetComparableSnapshot(entry, instanceName, targetName);
+        const templateHash = hashValue(this.normalizeDashboardForVersionComparison(snapshot.dashboard, managedVariableNames, entry.uid));
+        return index.revisions.find((revision) => revision.templateHash === templateHash)?.id;
+    }
     async rawTargetBackupItems(entries, instanceName, targetName) {
         const client = await this.clientFactory(instanceName);
         const folders = await client.listFolders();

@@ -3,6 +3,28 @@ import * as vscode from "vscode";
 import { DEFAULT_DEPLOYMENT_TARGET, ProjectRepository } from "../core/repository";
 import { DashboardRecord, DeploymentTargetRecord, InstanceRecord } from "../core/types";
 
+export class DevTargetTreeItem extends vscode.TreeItem {
+  constructor(instanceName?: string, targetName?: string) {
+    super("Dev Target", vscode.TreeItemCollapsibleState.None);
+    this.contextValue = "grafanaDevTargetSelector";
+    this.description = instanceName && targetName ? `${instanceName}/${targetName}` : "not selected";
+    this.tooltip = new vscode.MarkdownString(
+      [
+        "**Dev Target**",
+        "",
+        instanceName && targetName
+          ? `Current dev target: \`${instanceName}/${targetName}\``
+          : "No dev target selected.",
+      ].join("\n"),
+    );
+    this.iconPath = new vscode.ThemeIcon("server-environment");
+    this.command = {
+      command: "grafanaDashboards.selectActiveInstance",
+      title: "Select Active Deployment Target",
+    };
+  }
+}
+
 export class InstanceTreeItem extends vscode.TreeItem {
   constructor(
     readonly instance: InstanceRecord,
@@ -88,6 +110,7 @@ export class InstanceTreeProvider implements vscode.TreeDataProvider<vscode.Tree
 
   constructor(
     private readonly getRepository: () => ProjectRepository | undefined,
+    private readonly getActiveTarget: () => { instanceName?: string; targetName?: string },
     private readonly getMissingProjectMessage: () => string,
   ) {}
 
@@ -122,6 +145,7 @@ export class InstanceTreeProvider implements vscode.TreeDataProvider<vscode.Tree
       const instances = await repository.listInstances();
       if (instances.length === 0) {
         return [
+          new DevTargetTreeItem(this.getActiveTarget().instanceName, this.getActiveTarget().targetName),
           new InstancePlaceholderItem("Create an instance", {
             command: "grafanaDashboards.createInstance",
             title: "Create Instance",
@@ -129,12 +153,13 @@ export class InstanceTreeProvider implements vscode.TreeDataProvider<vscode.Tree
         ];
       }
 
-      return Promise.all(
+      const items = await Promise.all(
         instances.map(async (instance) => {
           const targets = await repository.listDeploymentTargets(instance.name);
           return new InstanceTreeItem(instance, targets.length);
         }),
       );
+      return [new DevTargetTreeItem(this.getActiveTarget().instanceName, this.getActiveTarget().targetName), ...items];
     } catch (error) {
       return [new InstancePlaceholderItem(`Instance error: ${String(error)}`)];
     }

@@ -33,9 +33,29 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.InstanceTreeProvider = exports.InstanceTargetDashboardTreeItem = exports.DeploymentTargetTreeItem = exports.InstanceTreeItem = void 0;
+exports.InstanceTreeProvider = exports.InstanceTargetDashboardTreeItem = exports.DeploymentTargetTreeItem = exports.InstanceTreeItem = exports.DevTargetTreeItem = void 0;
 const vscode = __importStar(require("vscode"));
 const repository_1 = require("../core/repository");
+class DevTargetTreeItem extends vscode.TreeItem {
+    constructor(instanceName, targetName) {
+        super("Dev Target", vscode.TreeItemCollapsibleState.None);
+        this.contextValue = "grafanaDevTargetSelector";
+        this.description = instanceName && targetName ? `${instanceName}/${targetName}` : "not selected";
+        this.tooltip = new vscode.MarkdownString([
+            "**Dev Target**",
+            "",
+            instanceName && targetName
+                ? `Current dev target: \`${instanceName}/${targetName}\``
+                : "No dev target selected.",
+        ].join("\n"));
+        this.iconPath = new vscode.ThemeIcon("server-environment");
+        this.command = {
+            command: "grafanaDashboards.selectActiveInstance",
+            title: "Select Active Deployment Target",
+        };
+    }
+}
+exports.DevTargetTreeItem = DevTargetTreeItem;
 class InstanceTreeItem extends vscode.TreeItem {
     instance;
     targetCount;
@@ -109,11 +129,13 @@ class InstancePlaceholderItem extends vscode.TreeItem {
 }
 class InstanceTreeProvider {
     getRepository;
+    getActiveTarget;
     getMissingProjectMessage;
     changeEmitter = new vscode.EventEmitter();
     onDidChangeTreeData = this.changeEmitter.event;
-    constructor(getRepository, getMissingProjectMessage) {
+    constructor(getRepository, getActiveTarget, getMissingProjectMessage) {
         this.getRepository = getRepository;
+        this.getActiveTarget = getActiveTarget;
         this.getMissingProjectMessage = getMissingProjectMessage;
     }
     refresh() {
@@ -142,16 +164,18 @@ class InstanceTreeProvider {
             const instances = await repository.listInstances();
             if (instances.length === 0) {
                 return [
+                    new DevTargetTreeItem(this.getActiveTarget().instanceName, this.getActiveTarget().targetName),
                     new InstancePlaceholderItem("Create an instance", {
                         command: "grafanaDashboards.createInstance",
                         title: "Create Instance",
                     }),
                 ];
             }
-            return Promise.all(instances.map(async (instance) => {
+            const items = await Promise.all(instances.map(async (instance) => {
                 const targets = await repository.listDeploymentTargets(instance.name);
                 return new InstanceTreeItem(instance, targets.length);
             }));
+            return [new DevTargetTreeItem(this.getActiveTarget().instanceName, this.getActiveTarget().targetName), ...items];
         }
         catch (error) {
             return [new InstancePlaceholderItem(`Instance error: ${String(error)}`)];

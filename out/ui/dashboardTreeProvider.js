@@ -33,85 +33,60 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DashboardTreeProvider = exports.DashboardTargetTreeItem = exports.DashboardInstanceTreeItem = exports.DashboardTreeItem = void 0;
+exports.DashboardTreeProvider = exports.DashboardRevisionTreeItem = exports.DashboardTreeItem = void 0;
 const vscode = __importStar(require("vscode"));
-const repository_1 = require("../core/repository");
 class DashboardTreeItem extends vscode.TreeItem {
     record;
-    instanceCount;
-    constructor(record, instanceCount) {
-        super(record.selectorName, instanceCount > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
+    revisionCount;
+    constructor(record, revisionCount) {
+        super(record.selectorName, revisionCount > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
         this.record = record;
-        this.instanceCount = instanceCount;
+        this.revisionCount = revisionCount;
         this.contextValue = "grafanaDashboard";
-        this.description = [
-            record.exists ? record.title ?? record.entry.uid : "Missing local file",
-            `${instanceCount} instance${instanceCount === 1 ? "" : "s"}`,
-        ].join(", ");
+        this.description = record.exists ? record.title ?? record.entry.uid : "Missing local file";
         this.tooltip = new vscode.MarkdownString([
             `**${record.selectorName}**`,
             "",
             `UID: \`${record.entry.uid}\``,
             `Path: \`${record.entry.path}\``,
             record.exists ? `Local file: \`${record.absolutePath}\`` : "Local file is missing.",
-            `Instances: ${instanceCount}`,
+            `Revisions: ${revisionCount}`,
         ].join("\n"));
         this.iconPath = new vscode.ThemeIcon(record.exists ? "file-code" : "warning");
     }
 }
 exports.DashboardTreeItem = DashboardTreeItem;
-class DashboardInstanceTreeItem extends vscode.TreeItem {
+class DashboardRevisionTreeItem extends vscode.TreeItem {
     record;
-    instance;
-    targetCount;
-    constructor(record, instance, targetCount) {
-        super(instance.name, targetCount > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
+    revision;
+    isActiveTargetRevision;
+    constructor(record, revision, isActiveTargetRevision) {
+        super(revision.record.id, vscode.TreeItemCollapsibleState.None);
         this.record = record;
-        this.instance = instance;
-        this.targetCount = targetCount;
-        this.contextValue = "grafanaDashboardInstance";
-        this.description = [
-            instance.envExists ? "env" : "no env",
-            `${targetCount} target${targetCount === 1 ? "" : "s"}`,
-        ].join(", ");
+        this.revision = revision;
+        this.isActiveTargetRevision = isActiveTargetRevision;
+        this.contextValue = "grafanaDashboardRevision";
+        const badges = [
+            revision.isCheckedOut ? "checked out" : undefined,
+            isActiveTargetRevision ? "on dev target" : undefined,
+            revision.record.source.kind,
+        ].filter(Boolean);
+        this.description = badges.join(", ");
         this.tooltip = new vscode.MarkdownString([
-            `**${record.selectorName} -> ${instance.name}**`,
+            `**${revision.record.id}**`,
             "",
-            `Env: ${instance.envExists ? "present" : "missing"}`,
-            `Targets: ${targetCount}`,
-            `Default target: \`${repository_1.DEFAULT_DEPLOYMENT_TARGET}\``,
-        ].join("\n"));
-        this.iconPath = new vscode.ThemeIcon(instance.envExists ? "server" : "warning");
+            `Dashboard: \`${record.selectorName}\``,
+            `Created: \`${revision.record.createdAt}\``,
+            `Source: \`${revision.record.source.kind}\``,
+            revision.isCheckedOut ? "Current checked out revision." : "",
+            isActiveTargetRevision ? "Matches the current dev target." : "",
+        ]
+            .filter(Boolean)
+            .join("\n"));
+        this.iconPath = new vscode.ThemeIcon(isActiveTargetRevision ? "radio-tower" : revision.isCheckedOut ? "check" : "history");
     }
 }
-exports.DashboardInstanceTreeItem = DashboardInstanceTreeItem;
-class DashboardTargetTreeItem extends vscode.TreeItem {
-    record;
-    target;
-    overrideExists;
-    folderOverrideExists;
-    constructor(record, target, overrideExists, folderOverrideExists) {
-        super(target.name, vscode.TreeItemCollapsibleState.None);
-        this.record = record;
-        this.target = target;
-        this.overrideExists = overrideExists;
-        this.folderOverrideExists = folderOverrideExists;
-        this.contextValue = "grafanaDashboardTarget";
-        this.description = [
-            target.name === repository_1.DEFAULT_DEPLOYMENT_TARGET ? "default" : "target",
-            overrideExists ? "override" : "no override",
-            folderOverrideExists ? "folder override" : "base folder",
-        ].join(", ");
-        this.tooltip = new vscode.MarkdownString([
-            `**${record.selectorName} -> ${target.instanceName}/${target.name}**`,
-            "",
-            `Override for this dashboard: ${overrideExists ? "present" : "missing"}`,
-            `Folder override for this dashboard: ${folderOverrideExists ? "present" : "missing"}`,
-        ].join("\n"));
-        this.iconPath = new vscode.ThemeIcon(target.name === repository_1.DEFAULT_DEPLOYMENT_TARGET ? "target" : "symbol-field");
-    }
-}
-exports.DashboardTargetTreeItem = DashboardTargetTreeItem;
+exports.DashboardRevisionTreeItem = DashboardRevisionTreeItem;
 class DashboardPlaceholderItem extends vscode.TreeItem {
     constructor(label, command) {
         super(label, vscode.TreeItemCollapsibleState.None);
@@ -122,15 +97,23 @@ class DashboardPlaceholderItem extends vscode.TreeItem {
 }
 class DashboardTreeProvider {
     getRepository;
+    getService;
+    getActiveTarget;
     getMissingProjectMessage;
     changeEmitter = new vscode.EventEmitter();
+    targetRevisionCache = new Map();
     onDidChangeTreeData = this.changeEmitter.event;
-    constructor(getRepository, getMissingProjectMessage) {
+    constructor(getRepository, getService, getActiveTarget, getMissingProjectMessage) {
         this.getRepository = getRepository;
+        this.getService = getService;
+        this.getActiveTarget = getActiveTarget;
         this.getMissingProjectMessage = getMissingProjectMessage;
     }
     refresh() {
         this.changeEmitter.fire();
+    }
+    clearTargetRevisionCache() {
+        this.targetRevisionCache.clear();
     }
     async getTreeItem(element) {
         return element;
@@ -147,10 +130,7 @@ class DashboardTreeProvider {
         }
         try {
             if (element instanceof DashboardTreeItem) {
-                return this.dashboardChildren(repository, element.record);
-            }
-            if (element instanceof DashboardInstanceTreeItem) {
-                return this.dashboardInstanceChildren(repository, element.record, element.instance);
+                return this.dashboardChildren(element.record);
             }
             const manifestExists = await repository.manifestExists();
             if (!manifestExists) {
@@ -170,43 +150,37 @@ class DashboardTreeProvider {
                     }),
                 ];
             }
-            const instances = await repository.listInstances();
-            return records.map((record) => new DashboardTreeItem(record, instances.length));
+            const service = this.getService();
+            return Promise.all(records.map(async (record) => {
+                const revisionCount = service
+                    ? (await service.listDashboardRevisions(record.entry).catch(() => [])).length
+                    : 0;
+                return new DashboardTreeItem(record, revisionCount);
+            }));
         }
         catch (error) {
             return [new DashboardPlaceholderItem(`Manifest error: ${String(error)}`)];
         }
     }
-    async dashboardChildren(repository, record) {
-        const instances = await repository.listInstances();
-        if (instances.length === 0) {
-            return [
-                new DashboardPlaceholderItem("Create an instance", {
-                    command: "grafanaDashboards.createInstance",
-                    title: "Create Instance",
-                }),
-            ];
+    async dashboardChildren(record) {
+        const service = this.getService();
+        if (!service) {
+            return [new DashboardPlaceholderItem("Dashboard service is not ready.")];
         }
-        return Promise.all(instances.map(async (instance) => {
-            const targets = await repository.listDeploymentTargets(instance.name);
-            return new DashboardInstanceTreeItem(record, instance, targets.length);
-        }));
-    }
-    async dashboardInstanceChildren(repository, record, instance) {
-        const targets = await repository.listDeploymentTargets(instance.name);
-        if (targets.length === 0) {
-            return [
-                new DashboardPlaceholderItem("Create a deployment target", {
-                    command: "grafanaDashboards.createDeploymentTarget",
-                    title: "Create Deployment Target",
-                    arguments: [instance.name],
-                }),
-            ];
+        const revisions = await service.listDashboardRevisions(record.entry).catch(() => []);
+        if (revisions.length === 0) {
+            return [new DashboardPlaceholderItem("No revisions yet.")];
         }
-        return Promise.all(targets.map(async (target) => {
-            const overrideFile = await repository.readTargetOverrideFile(instance.name, target.name, record.entry);
-            return new DashboardTargetTreeItem(record, target, Boolean(overrideFile && Object.keys(overrideFile.variables ?? {}).length > 0), Boolean(overrideFile?.folderPath?.trim()));
-        }));
+        const { instanceName, targetName } = this.getActiveTarget();
+        const cacheKey = instanceName && targetName ? `${record.selectorName}::${instanceName}/${targetName}` : undefined;
+        let matchedRevisionId = cacheKey ? this.targetRevisionCache.get(cacheKey) : undefined;
+        if (cacheKey && !this.targetRevisionCache.has(cacheKey)) {
+            matchedRevisionId = await service
+                .matchedRevisionIdForTarget(record.entry, instanceName, targetName)
+                .catch(() => undefined);
+            this.targetRevisionCache.set(cacheKey, matchedRevisionId);
+        }
+        return revisions.map((revision) => new DashboardRevisionTreeItem(record, revision, matchedRevisionId === revision.record.id));
     }
 }
 exports.DashboardTreeProvider = DashboardTreeProvider;

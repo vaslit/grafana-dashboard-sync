@@ -496,6 +496,20 @@ export class DashboardService {
     });
   }
 
+  async matchedRevisionIdForTarget(
+    entry: DashboardManifestEntry,
+    instanceName: string,
+    targetName: string,
+  ): Promise<string | undefined> {
+    const index = await this.ensureDashboardVersionIndex(entry);
+    const managedVariableNames = await this.managedVariableNames(entry);
+    const { snapshot } = await this.liveTargetComparableSnapshot(entry, instanceName, targetName);
+    const templateHash = hashValue(
+      this.normalizeDashboardForVersionComparison(snapshot.dashboard, managedVariableNames, entry.uid),
+    );
+    return index.revisions.find((revision) => revision.templateHash === templateHash)?.id;
+  }
+
   private async rawTargetBackupItems(
     entries: DashboardManifestEntry[],
     instanceName: string,

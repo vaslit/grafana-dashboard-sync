@@ -41,6 +41,9 @@ class SelectionState {
     instanceName;
     targetName;
     backupName;
+    detailsMode;
+    activeDevInstanceName;
+    activeDevTargetName;
     onDidChange = this.changeEmitter.event;
     get selectedDashboardSelectorName() {
         return this.dashboardSelectorName;
@@ -53,6 +56,15 @@ class SelectionState {
     }
     get selectedBackupName() {
         return this.backupName;
+    }
+    get selectedDetailsMode() {
+        return this.detailsMode;
+    }
+    get activeInstanceName() {
+        return this.activeDevInstanceName;
+    }
+    get activeTargetName() {
+        return this.activeDevTargetName;
     }
     setDashboard(selectorName) {
         if (this.dashboardSelectorName === selectorName) {
@@ -81,6 +93,21 @@ class SelectionState {
             return;
         }
         this.backupName = backupName;
+        this.changeEmitter.fire();
+    }
+    setDetailsMode(mode) {
+        if (this.detailsMode === mode) {
+            return;
+        }
+        this.detailsMode = mode;
+        this.changeEmitter.fire();
+    }
+    setActiveTarget(instanceName, targetName) {
+        if (this.activeDevInstanceName === instanceName && this.activeDevTargetName === targetName) {
+            return;
+        }
+        this.activeDevInstanceName = instanceName;
+        this.activeDevTargetName = targetName;
         this.changeEmitter.fire();
     }
 }
