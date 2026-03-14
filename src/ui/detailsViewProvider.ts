@@ -764,12 +764,6 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
         <div class="small">Connection source: ${escapeHtml(instance.mergedConnection?.sourceLabel ?? "No valid connection yet")}</div>
         <div class="actions">
           <button type="submit">Save Instance Config</button>
-          <button type="button" class="secondary" data-command="createDeploymentTarget">Create Deployment Target</button>
-          <button type="button" class="secondary" data-command="setInstanceToken">Set Token</button>
-          <button type="button" class="secondary" data-command="clearInstanceToken">Clear Token</button>
-          <button type="button" class="secondary" data-command="removeInstance">Remove Instance</button>
-          <button type="button" class="secondary" data-command="pullSelected">Pull</button>
-          <button type="button" class="secondary" data-command="deploySelected">Deploy</button>
         </div>
       </form>
     </section>`;

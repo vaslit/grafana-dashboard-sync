@@ -388,6 +388,11 @@
           "group": "navigation@7.5"
         },
         {
+          "command": "grafanaDashboards.setInstanceToken",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
+          "group": "navigation@7.75"
+        },
+        {
           "command": "grafanaDashboards.clearInstanceToken",
           "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
           "group": "navigation@8"
