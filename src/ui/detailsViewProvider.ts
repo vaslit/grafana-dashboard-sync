@@ -630,12 +630,6 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
         <div class="actions">
           <button type="submit">Save Manifest Entry</button>
           <button type="button" class="secondary" data-command="openDashboardJson">Open JSON</button>
-          <button type="button" class="secondary" data-command="pullSelected">Pull</button>
-          <button type="button" class="secondary" data-command="renderSelected">Render</button>
-          <button type="button" class="secondary" data-command="renderTarget">Render Target</button>
-          <button type="button" class="secondary" data-command="openRenderFolder">Open Render Folder</button>
-          <button type="button" class="secondary" data-command="deploySelected">Deploy</button>
-          <button type="button" class="secondary" data-command="removeDashboard">Remove</button>
         </div>
       </form>
     </section>`;
