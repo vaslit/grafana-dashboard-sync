@@ -1716,8 +1716,22 @@ export class DashboardService {
         sourceRepository,
       },
     );
-    await this.createTargetBackup(entries, instanceName, targetName, backupScopeForEntries(entries));
+    try {
+      await this.createTargetBackup(entries, instanceName, targetName, backupScopeForEntries(entries));
+    } catch (error) {
+      if (!this.isMissingDashboardError(error)) {
+        throw error;
+      }
+      this.log.info(
+        `Skipping pre-deploy backup for ${instanceName}/${targetName}: target dashboard is missing (${String(error)}).`,
+      );
+    }
     return this.deployRenderedManifest(renderManifest, instanceName, targetName, client, connection.baseUrl, folderCache);
+  }
+
+  private isMissingDashboardError(error: unknown): boolean {
+    const message = String(error);
+    return message.includes("Grafana API GET /api/dashboards/uid/") && message.includes("failed with 404");
   }
 
   private async renderDashboardSnapshots(

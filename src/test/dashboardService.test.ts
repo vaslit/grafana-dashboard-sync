@@ -798,6 +798,47 @@ test("deployDashboards applies overrides and creates missing folder", async () =
   });
 });
 
+test("deployDashboards continues when pre-deploy backup returns 404 for missing target dashboard", async () => {
+  await withTempProject(async (repository, entry) => {
+    await repository.createInstance("prod");
+    await repository.saveInstanceEnvValues("prod", {
+      GRAFANA_URL: "http://prod",
+    });
+    await repository.writeJsonFile(repository.dashboardPath(entry), {
+      title: "Status",
+      uid: entry.uid,
+    });
+    await initializeTargetState(repository, entry, "prod", "default", {
+      dashboardUid: "missing-target-uid",
+    });
+
+    let upsertPayload: { dashboard: Record<string, unknown>; folderUid?: string; message: string } | undefined;
+    const client = new MockGrafanaClient(
+      {
+        dashboard: {
+          title: "unused",
+          uid: entry.uid,
+        },
+        meta: {},
+      },
+      [],
+      (payload) => {
+        upsertPayload = payload;
+      },
+      [],
+      () => {
+        throw new Error('Grafana API GET /api/dashboards/uid/missing-target-uid failed with 404: {"message":"Dashboard not found","title":"Not found"}');
+      },
+    );
+
+    const service = new DashboardService(repository, logger(), async () => client);
+    const summary = await service.deployDashboards([entry], "prod");
+
+    assert.equal(summary.dashboardResults.length, 1);
+    assert.equal((upsertPayload?.dashboard.uid as string | undefined) ?? "", "missing-target-uid");
+  });
+});
+
 test("renderDashboards creates persisted render artifacts", async () => {
   await withTempProject(async (repository, entry) => {
     await repository.createInstance("prod");
