@@ -192,6 +192,22 @@ export interface PullSummary {
   dashboardResults: PullDashboardResult[];
 }
 
+export interface AlertsExportFileResult {
+  kind: "alertRules" | "contactPoints";
+  relativePath: string;
+  status: "updated" | "skipped";
+  targetPath: string;
+}
+
+export interface AlertsExportSummary {
+  instanceName: string;
+  targetName: string;
+  outputDir: string;
+  updatedCount: number;
+  skippedCount: number;
+  fileResults: AlertsExportFileResult[];
+}
+
 export type BackupScope = "dashboard" | "target" | "instance" | "multi-instance";
 
 export interface BackupDashboardRecord {
@@ -345,6 +361,8 @@ export interface GrafanaApi {
   listDashboards(): Promise<GrafanaDashboardSummary[]>;
   listDatasources(): Promise<GrafanaDatasourceSummary[]>;
   listFolders(parentUid?: string): Promise<GrafanaFolder[]>;
+  exportAlertRulesRaw(): Promise<string>;
+  exportContactPointsRaw(): Promise<string>;
   createFolder(input: { title: string; uid?: string; parentUid?: string }): Promise<GrafanaFolder>;
   upsertDashboard(input: {
     dashboard: Record<string, unknown>;

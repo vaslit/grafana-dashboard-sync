@@ -109,6 +109,14 @@ export class GrafanaClient implements GrafanaApi {
       }));
   }
 
+  async exportAlertRulesRaw(): Promise<string> {
+    return this.requestRaw("GET", "/api/v1/provisioning/alert-rules/export?format=json");
+  }
+
+  async exportContactPointsRaw(): Promise<string> {
+    return this.requestRaw("GET", "/api/v1/provisioning/contact-points/export?format=json");
+  }
+
   async createFolder(input: { title: string; uid?: string; parentUid?: string }): Promise<GrafanaFolder> {
     return this.requestJson<GrafanaFolder>("POST", "/api/folders", input);
   }
@@ -127,6 +135,19 @@ export class GrafanaClient implements GrafanaApi {
   }
 
   private async requestJson<T>(method: "GET" | "POST", requestPath: string, body?: unknown): Promise<T> {
+    const text = await this.requestRaw(method, requestPath, body);
+    if (!text) {
+      return {} as T;
+    }
+
+    try {
+      return JSON.parse(text) as T;
+    } catch (error) {
+      throw new Error(`Failed to parse Grafana response from ${requestPath}: ${String(error)}`);
+    }
+  }
+
+  private async requestRaw(method: "GET" | "POST", requestPath: string, body?: unknown): Promise<string> {
     const url = new URL(requestPath, `${this.connection.baseUrl}/`);
     const payload = body === undefined ? undefined : JSON.stringify(body);
     const client = url.protocol === "https:" ? https : http;
@@ -146,7 +167,7 @@ export class GrafanaClient implements GrafanaApi {
       headers["Content-Length"] = Buffer.byteLength(payload);
     }
 
-    return new Promise<T>((resolve, reject) => {
+    return new Promise<string>((resolve, reject) => {
       const request = client.request(
         url,
         {
@@ -172,17 +193,7 @@ export class GrafanaClient implements GrafanaApi {
               );
               return;
             }
-
-            if (!text) {
-              resolve({} as T);
-              return;
-            }
-
-            try {
-              resolve(JSON.parse(text) as T);
-            } catch (error) {
-              reject(new Error(`Failed to parse Grafana response from ${url.pathname}: ${String(error)}`));
-            }
+            resolve(text);
           });
         },
       );

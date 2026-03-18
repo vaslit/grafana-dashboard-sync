@@ -1149,6 +1149,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("grafanaDashboards.renderAllInstances", () =>
       renderAllInstancesCommand(),
     ),
+    vscode.commands.registerCommand("grafanaDashboards.exportAlerts", (item?: InstanceTreeItem | DeploymentTargetTreeItem) =>
+      exportAlertsCommand(item),
+    ),
     vscode.commands.registerCommand("grafanaDashboards.deployAllDashboards", () =>
       deployAllDashboardsCommand(),
     ),
@@ -1771,6 +1774,55 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       item instanceof InstanceTreeItem ? item.instance.name : item instanceof DeploymentTargetTreeItem ? item.target.instanceName : undefined;
     const targetName = item instanceof DeploymentTargetTreeItem ? item.target.name : undefined;
     await actionHandlers.openRenderFolder(instanceName, targetName);
+  }
+
+  async function pickTargetForInstance(instanceName: string): Promise<DeploymentTargetRecord> {
+    const repository = requireRepository();
+    const targets = await repository.listDeploymentTargets(instanceName);
+    if (targets.length === 0) {
+      throw new Error(`No deployment targets found for ${instanceName}.`);
+    }
+    if (targets.length === 1) {
+      return targets[0]!;
+    }
+
+    const selection = await vscode.window.showQuickPick(
+      targets.map((target) => ({
+        label: `${target.instanceName}/${target.name}`,
+        target,
+      })),
+      {
+        title: `Choose deployment target for ${instanceName}`,
+      },
+    );
+
+    if (!selection) {
+      throw new Error("No deployment target selected.");
+    }
+
+    return selection.target;
+  }
+
+  async function exportAlertsCommand(item?: InstanceTreeItem | DeploymentTargetTreeItem): Promise<void> {
+    const repository = requireRepository();
+    const service = requireService();
+    const target =
+      item instanceof DeploymentTargetTreeItem
+        ? item.target
+        : item instanceof InstanceTreeItem
+          ? await pickTargetForInstance(item.instance.name)
+          : await pickRequiredDeploymentTarget();
+
+    const summary = await service.exportAlerts(target.instanceName, target.name);
+    selectionState.setInstance(target.instanceName);
+    selectionState.setTarget(target.name);
+    selectionState.setActiveTarget(target.instanceName, target.name);
+    await refreshAll();
+
+    const outputLabel = path.relative(repository.workspaceRootPath, summary.outputDir) || ".";
+    void vscode.window.showInformationMessage(
+      `Alerts export complete for ${summary.instanceName}/${summary.targetName}: ${summary.updatedCount} updated, ${summary.skippedCount} unchanged (${outputLabel}).`,
+    );
   }
 
   async function pullAllDashboards(item?: InstanceTreeItem | DeploymentTargetTreeItem): Promise<void> {

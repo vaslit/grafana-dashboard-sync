@@ -27,6 +27,8 @@ import {
 } from "./overrides";
 import { DEFAULT_DEPLOYMENT_TARGET, ProjectRepository } from "./repository";
 import {
+  AlertsExportFileResult,
+  AlertsExportSummary,
   BackupDashboardRecord,
   BackupRecord,
   BackupRestoreSelection,
@@ -192,6 +194,79 @@ export class DashboardService {
     const client = await this.clientFactory(instanceName);
     const folderPaths = await collectFolderPaths(client);
     return [...new Set(folderPaths)].sort((left, right) => left.localeCompare(right));
+  }
+
+  async exportAlerts(
+    instanceName?: string,
+    targetName = DEFAULT_DEPLOYMENT_TARGET,
+  ): Promise<AlertsExportSummary> {
+    if (!instanceName) {
+      throw new Error("Choose a concrete Grafana instance and deployment target for alerts export.");
+    }
+
+    const target = await this.repository.deploymentTargetByName(instanceName, targetName);
+    if (!target) {
+      throw new Error(`Deployment target not found: ${instanceName}/${targetName}`);
+    }
+
+    const client = await this.clientFactory(instanceName);
+    this.log.info(`Exporting alerts from ${instanceName}/${targetName}`);
+
+    const [alertRulesRaw, contactPointsRaw] = await Promise.all([
+      client.exportAlertRulesRaw(),
+      client.exportContactPointsRaw(),
+    ]);
+
+    const fileSpecs: Array<{
+      kind: AlertsExportFileResult["kind"];
+      relativePath: string;
+      targetPath: string;
+      sourceContent: string;
+    }> = [
+      {
+        kind: "alertRules",
+        relativePath: path.posix.join("alerts", instanceName, targetName, "alert-rules.json"),
+        targetPath: this.repository.alertRulesExportPath(instanceName, targetName),
+        sourceContent: alertRulesRaw,
+      },
+      {
+        kind: "contactPoints",
+        relativePath: path.posix.join("alerts", instanceName, targetName, "contact-points.json"),
+        targetPath: this.repository.contactPointsExportPath(instanceName, targetName),
+        sourceContent: contactPointsRaw,
+      },
+    ];
+
+    let updatedCount = 0;
+    let skippedCount = 0;
+    const fileResults: AlertsExportFileResult[] = [];
+
+    for (const spec of fileSpecs) {
+      const outcome = await this.repository.syncPulledFile({
+        sourceContent: spec.sourceContent,
+        targetPath: spec.targetPath,
+      });
+      if (outcome.status === "updated") {
+        updatedCount += 1;
+      } else {
+        skippedCount += 1;
+      }
+      fileResults.push({
+        kind: spec.kind,
+        relativePath: spec.relativePath,
+        status: outcome.status,
+        targetPath: spec.targetPath,
+      });
+    }
+
+    return {
+      instanceName,
+      targetName: target.name,
+      outputDir: this.repository.alertsRootPath(instanceName, target.name),
+      updatedCount,
+      skippedCount,
+      fileResults,
+    };
   }
 
   async createDeploymentTarget(instanceName: string, targetName: string): Promise<DeploymentTargetRecord> {

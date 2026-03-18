@@ -13,6 +13,7 @@
 - настраивать datasource mappings
 - выполнять `render` для конкретных targets
 - делать `deploy` и `backup`
+- выгружать alerts (rules + contact points) по target
 
 Основная идея:
 
@@ -66,8 +67,9 @@
    - folder placement
    - target-specific dashboard UID
 4. Выполнить `render` для нужных targets.
-5. Проверить render output.
-6. Закоммитить изменения в git.
+5. При необходимости выполнить `Grafana Sync: Export Alerts` для нужного target.
+6. Проверить render output и exported alerts.
+7. Закоммитить изменения в git.
 
 ## Работа С Дашбордами
 
@@ -186,6 +188,31 @@ Render использует:
 - datasource mappings
 - variable overrides
 - placement overrides
+
+## Alerts Export
+
+Команда:
+
+- `Grafana Sync: Export Alerts`
+
+Что делает:
+
+- выгружает Grafana-managed `alert rules` и `contact points` для выбранного `instance/target`
+- сохраняет raw JSON как есть из API Grafana
+
+Куда сохраняет:
+
+```text
+alerts/<instance>/<target>/
+  alert-rules.json
+  contact-points.json
+```
+
+Важно:
+
+- `Export Alerts` не ограничен `dev target` (в отличие от `pull` dashboards)
+- в v1 нет override для query/message
+- в v1 не выгружаются `policies`, `templates`, `mute timings`
 
 ## Deploy
 

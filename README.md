@@ -12,6 +12,7 @@ Usage documentation is available in [USAGE.md](USAGE.md).
 - Render dashboards per deployment target before deploy.
 - Deploy one dashboard, one target, one instance, or all instances.
 - Create and restore grouped raw backups for dashboards, targets, instances, and whole projects.
+- Export Grafana-managed alert rules and contact points per target.
 - Manage deployment target placement overrides.
 - Rewrite datasource bindings per instance and per dashboard.
 - Store Grafana tokens or basic-auth passwords in VS Code Secret Storage instead of plaintext files.
@@ -29,6 +30,7 @@ project-root/
   dashboards/
   backups/
   renders/
+  alerts/   # created on first alerts export
 ```
 
 Minimal workspace marker:
@@ -79,6 +81,23 @@ renders/<instance>/<target>/
 ```
 
 Each render produces dashboard JSON files plus `.render-manifest.json` with resolved dashboard UIDs and target folders.
+
+### Alerts Export
+
+- `Grafana Sync: Export Alerts`
+
+Exports Grafana-managed alerting resources for the selected deployment target into:
+
+```text
+alerts/<instance>/<target>/
+```
+
+Current export scope:
+
+- `alert-rules.json`
+- `contact-points.json`
+
+Files are stored as raw JSON payloads from Grafana. This workflow does not apply overrides and does not export policies/templates/mute timings in v1.
 
 ### Deploy
 

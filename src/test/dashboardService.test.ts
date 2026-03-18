@@ -25,6 +25,12 @@ class MockGrafanaClient implements GrafanaApi {
     private readonly onUpsert: (payload: { dashboard: Record<string, unknown>; folderUid?: string; message: string }) => void,
     private readonly datasources: GrafanaDatasourceSummary[] = [],
     private readonly onGetDashboardByUid: (uid: string) => void = () => {},
+    private readonly alertExport?: {
+      alertRulesRaw?: string;
+      contactPointsRaw?: string;
+      failAlertRules?: boolean;
+      failContactPoints?: boolean;
+    },
   ) {}
 
   async getDashboardByUid(uid: string): Promise<GrafanaDashboardResponse> {
@@ -42,6 +48,20 @@ class MockGrafanaClient implements GrafanaApi {
 
   async listFolders(parentUid?: string): Promise<GrafanaFolder[]> {
     return [...this.folders].filter((folder) => (parentUid ? folder.parentUid === parentUid : !folder.parentUid));
+  }
+
+  async exportAlertRulesRaw(): Promise<string> {
+    if (this.alertExport?.failAlertRules) {
+      throw new Error("alert rules export failed");
+    }
+    return this.alertExport?.alertRulesRaw ?? "{\"apiVersion\":1}\n";
+  }
+
+  async exportContactPointsRaw(): Promise<string> {
+    if (this.alertExport?.failContactPoints) {
+      throw new Error("contact points export failed");
+    }
+    return this.alertExport?.contactPointsRaw ?? "{\"apiVersion\":1}\n";
   }
 
   async createFolder(input: { title: string; uid?: string; parentUid?: string }): Promise<GrafanaFolder> {
@@ -426,6 +446,102 @@ test("pullDashboards accepts mismatched remote dashboard uid and normalizes the 
 
     const dashboard = await repository.readJsonFile<Record<string, unknown>>(repository.dashboardPath(entry));
     assert.equal(dashboard.uid, entry.uid);
+  });
+});
+
+test("exportAlerts writes raw target files and skips unchanged content on repeated export", async () => {
+  await withTempProject(async (repository, entry) => {
+    await repository.createInstance("prod");
+    await repository.createDeploymentTarget("prod", "blue");
+    await repository.writeJsonFile(repository.dashboardPath(entry), {
+      title: "Status",
+      uid: entry.uid,
+    });
+
+    const alertRulesRaw = "{\n  \"apiVersion\": 1,\n  \"groups\": [{\"name\":\"alerts-blue\"}]\n}\n";
+    const contactPointsRaw = "{\n  \"apiVersion\": 1,\n  \"contactPoints\": [{\"name\":\"oncall\"}]\n}\n";
+    const service = new DashboardService(
+      repository,
+      logger(),
+      async () =>
+        new MockGrafanaClient(
+          {
+            dashboard: {
+              title: "unused",
+              uid: entry.uid,
+            },
+            meta: {},
+          },
+          [],
+          () => {},
+          [],
+          () => {},
+          {
+            alertRulesRaw,
+            contactPointsRaw,
+          },
+        ),
+    );
+
+    const first = await service.exportAlerts("prod", "blue");
+    assert.equal(first.instanceName, "prod");
+    assert.equal(first.targetName, "blue");
+    assert.equal(first.updatedCount, 2);
+    assert.equal(first.skippedCount, 0);
+    assert.equal(first.outputDir, repository.alertsRootPath("prod", "blue"));
+    assert.equal(
+      await repository.readTextFileIfExists(repository.alertRulesExportPath("prod", "blue")),
+      alertRulesRaw,
+    );
+    assert.equal(
+      await repository.readTextFileIfExists(repository.contactPointsExportPath("prod", "blue")),
+      contactPointsRaw,
+    );
+
+    const second = await service.exportAlerts("prod", "blue");
+    assert.equal(second.updatedCount, 0);
+    assert.equal(second.skippedCount, 2);
+    assert.deepEqual(
+      second.fileResults.map((result) => result.status),
+      ["skipped", "skipped"],
+    );
+  });
+});
+
+test("exportAlerts does not write partial files when one export endpoint fails", async () => {
+  await withTempProject(async (repository, entry) => {
+    await repository.createInstance("prod");
+    await repository.createDeploymentTarget("prod", "blue");
+    await repository.writeJsonFile(repository.dashboardPath(entry), {
+      title: "Status",
+      uid: entry.uid,
+    });
+
+    const service = new DashboardService(
+      repository,
+      logger(),
+      async () =>
+        new MockGrafanaClient(
+          {
+            dashboard: {
+              title: "unused",
+              uid: entry.uid,
+            },
+            meta: {},
+          },
+          [],
+          () => {},
+          [],
+          () => {},
+          {
+            failContactPoints: true,
+          },
+        ),
+    );
+
+    await assert.rejects(service.exportAlerts("prod", "blue"), /contact points export failed/);
+    assert.equal(await repository.readTextFileIfExists(repository.alertRulesExportPath("prod", "blue")), undefined);
+    assert.equal(await repository.readTextFileIfExists(repository.contactPointsExportPath("prod", "blue")), undefined);
   });
 });
 

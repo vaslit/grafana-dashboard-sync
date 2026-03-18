@@ -2,7 +2,7 @@
   "name": "grafana-dashboard-sync",
   "displayName": "Grafana Dashboard Sync",
   "description": "Manage Grafana dashboards from VS Code with pull, render, deploy, backup, and datasource mapping workflows.",
-  "version": "0.8.17",
+  "version": "0.9.0",
   "publisher": "vaslit",
   "license": "MIT",
   "repository": {
@@ -60,6 +60,7 @@
     "onCommand:grafanaDashboards.renderTarget",
     "onCommand:grafanaDashboards.renderInstance",
     "onCommand:grafanaDashboards.renderAllInstances",
+    "onCommand:grafanaDashboards.exportAlerts",
     "onCommand:grafanaDashboards.openRenderFolder",
     "onCommand:grafanaDashboards.removeInstance"
   ],
@@ -175,6 +176,10 @@
       {
         "command": "grafanaDashboards.renderAllInstances",
         "title": "Grafana Sync: Render All Instances"
+      },
+      {
+        "command": "grafanaDashboards.exportAlerts",
+        "title": "Grafana Sync: Export Alerts"
       },
       {
         "command": "grafanaDashboards.openRenderFolder",
@@ -438,6 +443,11 @@
           "group": "navigation@7.5"
         },
         {
+          "command": "grafanaDashboards.exportAlerts",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
+          "group": "navigation@7.6"
+        },
+        {
           "command": "grafanaDashboards.setInstanceToken",
           "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
           "group": "navigation@7.75"
@@ -511,6 +521,11 @@
           "command": "grafanaDashboards.createBackup",
           "when": "view == grafanaDashboards.instances && viewItem == grafanaDeploymentTarget",
           "group": "navigation@9.35"
+        },
+        {
+          "command": "grafanaDashboards.exportAlerts",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaDeploymentTarget",
+          "group": "navigation@9.4"
         },
         {
           "command": "grafanaDashboards.openRenderFolder",

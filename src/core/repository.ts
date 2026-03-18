@@ -605,6 +605,18 @@ export class ProjectRepository {
     return path.join(this.rendersDir, instanceName, targetName);
   }
 
+  alertsRootPath(instanceName: string, targetName: string): string {
+    return path.join(this.projectRootPath, "alerts", instanceName, targetName);
+  }
+
+  alertRulesExportPath(instanceName: string, targetName: string): string {
+    return path.join(this.alertsRootPath(instanceName, targetName), "alert-rules.json");
+  }
+
+  contactPointsExportPath(instanceName: string, targetName: string): string {
+    return path.join(this.alertsRootPath(instanceName, targetName), "contact-points.json");
+  }
+
   renderManifestPath(instanceName: string, targetName: string): string {
     return path.join(this.renderRootPath(instanceName, targetName), ".render-manifest.json");
   }
