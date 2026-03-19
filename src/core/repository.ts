@@ -6,6 +6,10 @@ import { stableJsonStringify } from "./json";
 import { findManifestEntryBySelector, selectorNameForEntry, validateManifest } from "./manifest";
 import { PROJECT_CONFIG_FILE, ProjectLayout, defaultProjectLayout } from "./projectLocator";
 import {
+  AlertManifestContactPointEntry,
+  AlertManifestRuleEntry,
+  AlertRuleRecord,
+  AlertsManifest,
   BackupDashboardRecord,
   BackupManifest,
   BackupRecord,
@@ -100,6 +104,143 @@ export const DEFAULT_DEPLOYMENT_TARGET = "default";
 
 function normalizeRelativePath(relativePath: string): string {
   return relativePath.replace(/\\/g, "/");
+}
+
+function sanitizeFileSegment(value: string): string {
+  const normalized = value
+    .trim()
+    .replace(/[\\/:*?"<>|]/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^\.+|\.+$/g, "");
+  return normalized || "item";
+}
+
+function emptyAlertsManifest(instanceName: string, targetName: string): AlertsManifest {
+  return {
+    version: 1,
+    instanceName,
+    targetName,
+    generatedAt: new Date().toISOString(),
+    rules: {},
+    contactPoints: {},
+  };
+}
+
+function normalizeAlertRuleEntry(entry: AlertManifestRuleEntry): AlertManifestRuleEntry {
+  return {
+    uid: entry.uid.trim(),
+    title: entry.title.trim() || entry.uid.trim(),
+    path: normalizeRelativePath(entry.path),
+    contactPointKeys: [...new Set(entry.contactPointKeys.map((key) => key.trim()).filter(Boolean))].sort((a, b) =>
+      a.localeCompare(b),
+    ),
+    contactPointStatus: entry.contactPointStatus,
+    ...(entry.lastExportedAt ? { lastExportedAt: entry.lastExportedAt } : {}),
+    ...(entry.lastAppliedAt ? { lastAppliedAt: entry.lastAppliedAt } : {}),
+  };
+}
+
+function normalizeAlertContactPointEntry(entry: AlertManifestContactPointEntry): AlertManifestContactPointEntry {
+  return {
+    key: entry.key.trim(),
+    path: normalizeRelativePath(entry.path),
+    name: entry.name.trim(),
+    ...(entry.uid?.trim() ? { uid: entry.uid.trim() } : {}),
+    ...(entry.type?.trim() ? { type: entry.type.trim() } : {}),
+  };
+}
+
+function validateAlertsManifest(
+  manifest: AlertsManifest,
+  filePath: string,
+  expectedInstanceName?: string,
+  expectedTargetName?: string,
+): AlertsManifest {
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    throw new Error(`Invalid alerts manifest: ${filePath}`);
+  }
+  if (manifest.version !== 1) {
+    throw new Error(`Invalid alerts manifest version: ${filePath}`);
+  }
+  if (typeof manifest.instanceName !== "string" || !manifest.instanceName.trim()) {
+    throw new Error(`Invalid alerts manifest instanceName: ${filePath}`);
+  }
+  if (typeof manifest.targetName !== "string" || !manifest.targetName.trim()) {
+    throw new Error(`Invalid alerts manifest targetName: ${filePath}`);
+  }
+  if (expectedInstanceName && manifest.instanceName !== expectedInstanceName) {
+    throw new Error(`Alerts manifest instanceName mismatch: ${filePath}`);
+  }
+  if (expectedTargetName && manifest.targetName !== expectedTargetName) {
+    throw new Error(`Alerts manifest targetName mismatch: ${filePath}`);
+  }
+  if (!manifest.rules || typeof manifest.rules !== "object" || Array.isArray(manifest.rules)) {
+    throw new Error(`Invalid alerts manifest rules: ${filePath}`);
+  }
+  if (!manifest.contactPoints || typeof manifest.contactPoints !== "object" || Array.isArray(manifest.contactPoints)) {
+    throw new Error(`Invalid alerts manifest contactPoints: ${filePath}`);
+  }
+
+  const rules: AlertsManifest["rules"] = {};
+  for (const [uid, rawRule] of Object.entries(manifest.rules)) {
+    if (!uid.trim()) {
+      throw new Error(`Invalid alerts manifest rule uid: ${filePath}`);
+    }
+    if (!rawRule || typeof rawRule !== "object" || Array.isArray(rawRule)) {
+      throw new Error(`Invalid alerts manifest rule entry: ${filePath}`);
+    }
+    const entry = rawRule as AlertManifestRuleEntry;
+    if (typeof entry.uid !== "string" || !entry.uid.trim()) {
+      throw new Error(`Invalid alerts manifest rule.uid: ${filePath}`);
+    }
+    if (typeof entry.title !== "string" || !entry.title.trim()) {
+      throw new Error(`Invalid alerts manifest rule.title: ${filePath}`);
+    }
+    if (typeof entry.path !== "string" || !entry.path.trim()) {
+      throw new Error(`Invalid alerts manifest rule.path: ${filePath}`);
+    }
+    if (!Array.isArray(entry.contactPointKeys)) {
+      throw new Error(`Invalid alerts manifest rule.contactPointKeys: ${filePath}`);
+    }
+    if (!["linked", "missing", "policy-managed"].includes(entry.contactPointStatus)) {
+      throw new Error(`Invalid alerts manifest rule.contactPointStatus: ${filePath}`);
+    }
+    rules[uid] = normalizeAlertRuleEntry(entry);
+  }
+
+  const contactPoints: AlertsManifest["contactPoints"] = {};
+  for (const [key, rawContactPoint] of Object.entries(manifest.contactPoints)) {
+    if (!key.trim()) {
+      throw new Error(`Invalid alerts manifest contact point key: ${filePath}`);
+    }
+    if (!rawContactPoint || typeof rawContactPoint !== "object" || Array.isArray(rawContactPoint)) {
+      throw new Error(`Invalid alerts manifest contact point entry: ${filePath}`);
+    }
+    const entry = rawContactPoint as AlertManifestContactPointEntry;
+    if (typeof entry.key !== "string" || !entry.key.trim()) {
+      throw new Error(`Invalid alerts manifest contact point key: ${filePath}`);
+    }
+    if (typeof entry.path !== "string" || !entry.path.trim()) {
+      throw new Error(`Invalid alerts manifest contact point path: ${filePath}`);
+    }
+    if (typeof entry.name !== "string" || !entry.name.trim()) {
+      throw new Error(`Invalid alerts manifest contact point name: ${filePath}`);
+    }
+    contactPoints[key] = normalizeAlertContactPointEntry(entry);
+  }
+
+  return {
+    version: 1,
+    instanceName: manifest.instanceName,
+    targetName: manifest.targetName,
+    generatedAt:
+      typeof manifest.generatedAt === "string" && manifest.generatedAt.trim()
+        ? manifest.generatedAt
+        : new Date().toISOString(),
+    rules,
+    contactPoints,
+  };
 }
 
 function toRelativeConfigPath(projectRootPath: string, absolutePath: string): string {
@@ -609,12 +750,24 @@ export class ProjectRepository {
     return path.join(this.projectRootPath, "alerts", instanceName, targetName);
   }
 
-  alertRulesExportPath(instanceName: string, targetName: string): string {
-    return path.join(this.alertsRootPath(instanceName, targetName), "alert-rules.json");
+  alertsManifestPath(instanceName: string, targetName: string): string {
+    return path.join(this.alertsRootPath(instanceName, targetName), "manifest.json");
   }
 
-  contactPointsExportPath(instanceName: string, targetName: string): string {
-    return path.join(this.alertsRootPath(instanceName, targetName), "contact-points.json");
+  alertsRulesDirPath(instanceName: string, targetName: string): string {
+    return path.join(this.alertsRootPath(instanceName, targetName), "rules");
+  }
+
+  alertsContactPointsDirPath(instanceName: string, targetName: string): string {
+    return path.join(this.alertsRootPath(instanceName, targetName), "contact-points");
+  }
+
+  alertRuleFilePath(instanceName: string, targetName: string, uid: string): string {
+    return path.join(this.alertsRulesDirPath(instanceName, targetName), `${sanitizeFileSegment(uid)}.json`);
+  }
+
+  alertContactPointFilePath(instanceName: string, targetName: string, key: string): string {
+    return path.join(this.alertsContactPointsDirPath(instanceName, targetName), `${sanitizeFileSegment(key)}.json`);
   }
 
   renderManifestPath(instanceName: string, targetName: string): string {
@@ -1759,6 +1912,168 @@ export class ProjectRepository {
 
     return {
       target,
+    };
+  }
+
+  async readAlertsManifest(instanceName: string, targetName: string): Promise<AlertsManifest | undefined> {
+    const filePath = this.alertsManifestPath(instanceName, targetName);
+    if (!(await exists(filePath))) {
+      return undefined;
+    }
+    const raw = await this.readJsonFile<AlertsManifest>(filePath);
+    return validateAlertsManifest(raw, filePath, instanceName, targetName);
+  }
+
+  async loadAlertsManifest(instanceName: string, targetName: string): Promise<AlertsManifest> {
+    return (
+      (await this.readAlertsManifest(instanceName, targetName)) ??
+      emptyAlertsManifest(instanceName, targetName)
+    );
+  }
+
+  async saveAlertsManifest(instanceName: string, targetName: string, manifest: AlertsManifest): Promise<string> {
+    const filePath = this.alertsManifestPath(instanceName, targetName);
+    const valid = validateAlertsManifest(manifest, filePath, instanceName, targetName);
+    await this.writeJsonFile(filePath, valid);
+    return filePath;
+  }
+
+  async saveAlertRuleJson(
+    instanceName: string,
+    targetName: string,
+    uid: string,
+    rule: Record<string, unknown>,
+  ): Promise<string> {
+    const manifest = await this.loadAlertsManifest(instanceName, targetName);
+    const entry = manifest.rules[uid];
+    if (!entry) {
+      throw new Error(`Alert is not exported locally: ${uid}`);
+    }
+    const filePath = path.join(this.alertsRootPath(instanceName, targetName), normalizeRelativePath(entry.path));
+    await this.writeJsonFile(filePath, rule);
+    return filePath;
+  }
+
+  async readAlertRuleJson(
+    instanceName: string,
+    targetName: string,
+    uid: string,
+  ): Promise<Record<string, unknown> | undefined> {
+    const manifest = await this.readAlertsManifest(instanceName, targetName);
+    const rule = manifest?.rules[uid];
+    if (!rule) {
+      return undefined;
+    }
+    const filePath = path.join(this.alertsRootPath(instanceName, targetName), normalizeRelativePath(rule.path));
+    if (!(await exists(filePath))) {
+      return undefined;
+    }
+    return this.readJsonFile<Record<string, unknown>>(filePath);
+  }
+
+  async readAlertContactPointJson(
+    instanceName: string,
+    targetName: string,
+    key: string,
+  ): Promise<Record<string, unknown> | undefined> {
+    const manifest = await this.readAlertsManifest(instanceName, targetName);
+    const contactPoint = manifest?.contactPoints[key];
+    if (!contactPoint) {
+      return undefined;
+    }
+    const filePath = path.join(this.alertsRootPath(instanceName, targetName), normalizeRelativePath(contactPoint.path));
+    if (!(await exists(filePath))) {
+      return undefined;
+    }
+    return this.readJsonFile<Record<string, unknown>>(filePath);
+  }
+
+  async listTargetAlertRecords(instanceName: string, targetName: string): Promise<AlertRuleRecord[]> {
+    const manifest = await this.readAlertsManifest(instanceName, targetName);
+    if (!manifest) {
+      return [];
+    }
+
+    const root = this.alertsRootPath(instanceName, targetName);
+    const records = await Promise.all(
+      Object.entries(manifest.rules).map(async ([uid, rule]): Promise<AlertRuleRecord> => {
+        const absolutePath = path.join(root, normalizeRelativePath(rule.path));
+        return {
+          uid,
+          title: rule.title,
+          instanceName,
+          targetName,
+          path: normalizeRelativePath(rule.path),
+          absolutePath,
+          exists: await exists(absolutePath),
+          contactPointKeys: [...rule.contactPointKeys],
+          contactPointStatus: rule.contactPointStatus,
+          ...(rule.lastExportedAt ? { lastExportedAt: rule.lastExportedAt } : {}),
+          ...(rule.lastAppliedAt ? { lastAppliedAt: rule.lastAppliedAt } : {}),
+        };
+      }),
+    );
+
+    return records.sort((left, right) => left.title.localeCompare(right.title) || left.uid.localeCompare(right.uid));
+  }
+
+  async alertRecordByUid(
+    instanceName: string,
+    targetName: string,
+    uid: string,
+  ): Promise<AlertRuleRecord | undefined> {
+    const records = await this.listTargetAlertRecords(instanceName, targetName);
+    return records.find((record) => record.uid === uid);
+  }
+
+  async removeAlertFromProject(
+    instanceName: string,
+    targetName: string,
+    uid: string,
+  ): Promise<{ entry: AlertManifestRuleEntry; removedPaths: string[]; removedContactPointKeys: string[] }> {
+    const manifest = await this.loadAlertsManifest(instanceName, targetName);
+    const entry = manifest.rules[uid];
+    if (!entry) {
+      throw new Error(`Alert is not exported locally: ${uid}`);
+    }
+
+    delete manifest.rules[uid];
+    manifest.generatedAt = new Date().toISOString();
+
+    const removedPaths: string[] = [];
+    const removedContactPointKeys: string[] = [];
+    const rulePath = path.join(this.alertsRootPath(instanceName, targetName), normalizeRelativePath(entry.path));
+    if (await removeFileIfExists(rulePath)) {
+      removedPaths.push(rulePath);
+    }
+
+    for (const key of entry.contactPointKeys) {
+      const stillUsed = Object.values(manifest.rules).some((rule) => rule.contactPointKeys.includes(key));
+      if (stillUsed) {
+        continue;
+      }
+
+      const contactPoint = manifest.contactPoints[key];
+      delete manifest.contactPoints[key];
+      removedContactPointKeys.push(key);
+      if (!contactPoint) {
+        continue;
+      }
+
+      const contactPointPath = path.join(
+        this.alertsRootPath(instanceName, targetName),
+        normalizeRelativePath(contactPoint.path),
+      );
+      if (await removeFileIfExists(contactPointPath)) {
+        removedPaths.push(contactPointPath);
+      }
+    }
+
+    await this.saveAlertsManifest(instanceName, targetName, manifest);
+    return {
+      entry,
+      removedPaths,
+      removedContactPointKeys,
     };
   }
 

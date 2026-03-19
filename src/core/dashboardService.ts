@@ -27,8 +27,16 @@ import {
 } from "./overrides";
 import { DEFAULT_DEPLOYMENT_TARGET, ProjectRepository } from "./repository";
 import {
-  AlertsExportFileResult,
-  AlertsExportSummary,
+  AlertDetailsModel,
+  AlertDatasourceSelectionModel,
+  AlertLinkStatus,
+  AlertRuleRecord,
+  AlertStorageFileResult,
+  AlertSyncStatus,
+  AlertUploadContactPointResult,
+  AlertsManifest,
+  CopyAlertSummary,
+  ExportSelectedAlertsSummary,
   BackupDashboardRecord,
   BackupRecord,
   BackupRestoreSelection,
@@ -52,6 +60,7 @@ import {
   GrafanaDashboardSummary,
   GrafanaDatasourceSummary,
   GrafanaFolder,
+  GrafanaAlertRuleSummary,
   LiveTargetVersionStatus,
   LogSink,
   OverrideEditorVariableModel,
@@ -62,6 +71,7 @@ import {
   RestoreSummary,
   TargetDashboardSummaryRow,
   TargetDatasourceBindingRow,
+  UploadAlertSummary,
 } from "./types";
 import { GrafanaClient } from "./grafanaClient";
 
@@ -91,6 +101,13 @@ interface TargetRevisionState {
   revisionState: DashboardTargetRevisionState;
   revision: DashboardRevisionRecord;
   snapshot: DashboardRevisionSnapshot;
+}
+
+interface AlertDatasourceRef {
+  refId: string;
+  datasourceUid: string;
+  datasourceName?: string;
+  datasourceType?: string;
 }
 
 function sanitizeDashboardForStorage(dashboard: Record<string, unknown>): Record<string, unknown> {
@@ -137,6 +154,203 @@ function folderPathFromChain(chain: GrafanaFolder[]): string | undefined {
     return undefined;
   }
   return chain.map((folder) => folder.title).join("/");
+}
+
+function removeUndefinedKeys(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([, candidate]) => candidate !== undefined));
+}
+
+function normalizeAlertRuleForStorage(rule: Record<string, unknown>): Record<string, unknown> {
+  const next = structuredClone(rule);
+  delete next.id;
+  delete next.updated;
+  delete next.provenance;
+  return next;
+}
+
+function normalizeAlertRuleForUpload(rule: Record<string, unknown>): Record<string, unknown> {
+  const next = normalizeAlertRuleForStorage(rule);
+  return removeUndefinedKeys(next);
+}
+
+function normalizeContactPointForStorage(contactPoint: Record<string, unknown>): Record<string, unknown> {
+  const next = structuredClone(contactPoint);
+  delete next.provenance;
+  delete next.version;
+  return next;
+}
+
+function normalizeContactPointForUpload(contactPoint: Record<string, unknown>): Record<string, unknown> {
+  const next = normalizeContactPointForStorage(contactPoint);
+  return removeUndefinedKeys(next);
+}
+
+function normalizeContactPointKeySegment(value: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "item";
+}
+
+function contactPointKeyFor(contactPoint: Record<string, unknown>): string {
+  const uid = typeof contactPoint.uid === "string" ? contactPoint.uid.trim() : "";
+  if (uid) {
+    return `uid__${uid}`;
+  }
+  const name = typeof contactPoint.name === "string" ? contactPoint.name : "contact-point";
+  const type = typeof contactPoint.type === "string" ? contactPoint.type : "unknown";
+  return `name__${normalizeContactPointKeySegment(name)}__type__${normalizeContactPointKeySegment(type)}`;
+}
+
+function alertUid(rule: Record<string, unknown>): string | undefined {
+  const value = rule.uid;
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function alertTitle(rule: Record<string, unknown>): string {
+  return typeof rule.title === "string" && rule.title.trim() ? rule.title.trim() : alertUid(rule) ?? "alert";
+}
+
+function alertReceiver(rule: Record<string, unknown>): string | undefined {
+  const rawSettings = rule.notification_settings;
+  if (!rawSettings || typeof rawSettings !== "object" || Array.isArray(rawSettings)) {
+    return undefined;
+  }
+  const receiver = (rawSettings as { receiver?: unknown }).receiver;
+  return typeof receiver === "string" && receiver.trim() ? receiver.trim() : undefined;
+}
+
+function alertFolderUid(rule: Record<string, unknown>): string | undefined {
+  const raw = rule.folderUID ?? rule.folderUid;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+}
+
+function alertRuleGroup(rule: Record<string, unknown>): string | undefined {
+  const raw = rule.ruleGroup;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+}
+
+function alertIsPaused(rule: Record<string, unknown>): boolean {
+  return rule.isPaused === true;
+}
+
+function extractAlertDatasourceRefs(rule: Record<string, unknown>): AlertDatasourceRef[] {
+  const data = Array.isArray(rule.data) ? rule.data : [];
+  const refs: AlertDatasourceRef[] = [];
+
+  for (const item of data) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+
+    const record = item as Record<string, unknown>;
+    const datasourceUid =
+      typeof record.datasourceUid === "string" && record.datasourceUid.trim()
+        ? record.datasourceUid.trim()
+        : undefined;
+    if (!datasourceUid || datasourceUid === "__expr__") {
+      continue;
+    }
+
+    const model =
+      record.model && typeof record.model === "object" && !Array.isArray(record.model)
+        ? (record.model as Record<string, unknown>)
+        : undefined;
+    const datasource =
+      model?.datasource && typeof model.datasource === "object" && !Array.isArray(model.datasource)
+        ? (model.datasource as Record<string, unknown>)
+        : undefined;
+    const refId =
+      typeof record.refId === "string" && record.refId.trim()
+        ? record.refId.trim()
+        : typeof model?.refId === "string" && model.refId.trim()
+          ? model.refId.trim()
+          : datasourceUid;
+
+    refs.push({
+      refId,
+      datasourceUid,
+      ...(typeof datasource?.name === "string" && datasource.name.trim()
+        ? { datasourceName: datasource.name.trim() }
+        : {}),
+      ...(typeof datasource?.type === "string" && datasource.type.trim()
+        ? { datasourceType: datasource.type.trim() }
+        : {}),
+    });
+  }
+
+  return refs;
+}
+
+function alertDatasourceSelectionModel(rule: Record<string, unknown>): AlertDatasourceSelectionModel | undefined {
+  const refs = extractAlertDatasourceRefs(rule);
+  if (refs.length === 0) {
+    return undefined;
+  }
+
+  const refIds = [...new Set(refs.map((ref) => ref.refId))].sort((left, right) => left.localeCompare(right));
+  const sourceUids = [...new Set(refs.map((ref) => ref.datasourceUid))].sort((left, right) => left.localeCompare(right));
+  const sourceTypes = [...new Set(refs.map((ref) => ref.datasourceType).filter((value): value is string => Boolean(value)))].sort(
+    (left, right) => left.localeCompare(right),
+  );
+  const firstRef = refs[0];
+
+  return {
+    refIds,
+    sourceUids,
+    sourceTypes,
+    targetUid: firstRef?.datasourceUid,
+    ...(firstRef?.datasourceName ? { targetName: firstRef.datasourceName } : {}),
+  };
+}
+
+function applyAlertDatasourceSelection(
+  rule: Record<string, unknown>,
+  selection: { uid: string; name?: string },
+): Record<string, unknown> {
+  const nextRule = structuredClone(rule);
+  const data = Array.isArray(nextRule.data) ? nextRule.data : [];
+  nextRule.data = data.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return item;
+    }
+
+    const record = item as Record<string, unknown>;
+    const datasourceUid =
+      typeof record.datasourceUid === "string" && record.datasourceUid.trim()
+        ? record.datasourceUid.trim()
+        : undefined;
+    if (!datasourceUid || datasourceUid === "__expr__") {
+      return record;
+    }
+
+    const nextRecord: Record<string, unknown> = {
+      ...record,
+      datasourceUid: selection.uid,
+    };
+    const model =
+      nextRecord.model && typeof nextRecord.model === "object" && !Array.isArray(nextRecord.model)
+        ? ({ ...(nextRecord.model as Record<string, unknown>) } as Record<string, unknown>)
+        : undefined;
+    const datasource =
+      model?.datasource && typeof model.datasource === "object" && !Array.isArray(model.datasource)
+        ? ({ ...(model.datasource as Record<string, unknown>) } as Record<string, unknown>)
+        : undefined;
+    if (model && datasource) {
+      datasource.uid = selection.uid;
+      if (selection.name) {
+        datasource.name = selection.name;
+      }
+      model.datasource = datasource;
+      nextRecord.model = model;
+    }
+    return nextRecord;
+  });
+
+  return nextRule;
 }
 
 function backupScopeForEntries(entries: DashboardManifestEntry[]): BackupScope {
@@ -196,12 +410,189 @@ export class DashboardService {
     return [...new Set(folderPaths)].sort((left, right) => left.localeCompare(right));
   }
 
+  private isGrafanaNotFoundError(error: unknown): boolean {
+    return String(error).includes("failed with 404");
+  }
+
+  private isGrafanaInternalServerError(error: unknown): boolean {
+    return String(error).includes("failed with 500");
+  }
+
+  private async upsertAlertRuleWithGroupFallback(
+    client: GrafanaApi,
+    rule: Record<string, unknown>,
+    existingRemoteRule?: Record<string, unknown>,
+  ): Promise<"updated" | "skipped"> {
+    const uid = alertUid(rule);
+    if (!uid) {
+      throw new Error("Alert rule UID is required for upload.");
+    }
+
+    if (existingRemoteRule) {
+      const normalizedRemoteRule = normalizeAlertRuleForUpload(existingRemoteRule);
+      if (stableJsonStringify(normalizedRemoteRule) === stableJsonStringify(rule)) {
+        return "skipped";
+      }
+    }
+
+    try {
+      if (existingRemoteRule) {
+        await client.updateAlertRule(uid, rule);
+      } else {
+        await client.createAlertRule(rule);
+      }
+      return "updated";
+    } catch (error) {
+      if (!this.isGrafanaInternalServerError(error)) {
+        throw error;
+      }
+    }
+
+    const folderUid = alertFolderUid(rule);
+    const group = alertRuleGroup(rule);
+    if (!folderUid || !group) {
+      throw new Error(`Grafana rejected direct alert rule upsert for ${uid}, and folderUID/ruleGroup are missing.`);
+    }
+
+    const remoteGroup = await client.getAlertRuleGroup(folderUid, group);
+    const rawRules = Array.isArray(remoteGroup.rules) ? remoteGroup.rules : [];
+    const nextRules = [
+      ...rawRules.filter((candidate) => alertUid(candidate as Record<string, unknown>) !== uid),
+      rule,
+    ];
+    const nextGroup = {
+      ...remoteGroup,
+      rules: nextRules,
+    };
+    await client.updateAlertRuleGroup(folderUid, group, nextGroup);
+    return "updated";
+  }
+
+  private async ruleWithGroupPauseState(
+    client: GrafanaApi,
+    rule: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const uid = alertUid(rule);
+    const folderUid = alertFolderUid(rule);
+    const group = alertRuleGroup(rule);
+    if (!uid || !folderUid || !group) {
+      return rule;
+    }
+
+    try {
+      const remoteGroup = await client.getAlertRuleGroup(folderUid, group);
+      const rawRules = Array.isArray(remoteGroup.rules) ? remoteGroup.rules : [];
+      const groupRule = rawRules.find((candidate) => alertUid(candidate as Record<string, unknown>) === uid) as
+        | Record<string, unknown>
+        | undefined;
+      if (groupRule && typeof groupRule.isPaused === "boolean") {
+        return {
+          ...rule,
+          isPaused: groupRule.isPaused,
+        };
+      }
+    } catch (error) {
+      if (!this.isGrafanaNotFoundError(error)) {
+        throw error;
+      }
+    }
+
+    return rule;
+  }
+
+  private async syncAlertPauseStateWithGroup(
+    client: GrafanaApi,
+    rule: Record<string, unknown>,
+  ): Promise<"updated" | "skipped"> {
+    const uid = alertUid(rule);
+    const folderUid = alertFolderUid(rule);
+    const group = alertRuleGroup(rule);
+    if (!uid || !folderUid || !group) {
+      return "skipped";
+    }
+
+    const desiredPaused = alertIsPaused(rule);
+    let remoteGroup: Record<string, unknown>;
+    try {
+      remoteGroup = await client.getAlertRuleGroup(folderUid, group);
+    } catch (error) {
+      if (this.isGrafanaNotFoundError(error)) {
+        return "skipped";
+      }
+      throw error;
+    }
+
+    const rawRules = Array.isArray(remoteGroup.rules) ? remoteGroup.rules : [];
+    const nextRules: Record<string, unknown>[] = [];
+    let changed = false;
+    let found = false;
+
+    for (const candidate of rawRules) {
+      const candidateRule = candidate as Record<string, unknown>;
+      if (alertUid(candidateRule) !== uid) {
+        nextRules.push(candidateRule);
+        continue;
+      }
+
+      found = true;
+      const currentPaused = candidateRule.isPaused === true;
+      if (currentPaused !== desiredPaused) {
+        changed = true;
+      }
+      nextRules.push({
+        ...candidateRule,
+        isPaused: desiredPaused,
+      });
+    }
+
+    if (!found) {
+      nextRules.push({
+        ...rule,
+        isPaused: desiredPaused,
+      });
+      changed = true;
+    }
+
+    if (!changed) {
+      return "skipped";
+    }
+
+    await client.updateAlertRuleGroup(folderUid, group, {
+      ...remoteGroup,
+      rules: nextRules,
+    });
+    return "updated";
+  }
+
+  async listRemoteAlertRules(instanceName?: string): Promise<GrafanaAlertRuleSummary[]> {
+    if (!instanceName) {
+      throw new Error("Choose a concrete Grafana instance for alerts.");
+    }
+    const client = await this.clientFactory(instanceName);
+    const rules = await client.listAlertRules();
+    const summaries: GrafanaAlertRuleSummary[] = [];
+    for (const rule of rules) {
+      const uid = alertUid(rule);
+      if (!uid) {
+        continue;
+      }
+      const receiver = alertReceiver(rule);
+      summaries.push({
+        uid,
+        title: alertTitle(rule),
+        ...(receiver ? { receiver } : {}),
+      });
+    }
+    return summaries.sort((left, right) => left.title.localeCompare(right.title) || left.uid.localeCompare(right.uid));
+  }
+
   async exportAlerts(
     instanceName?: string,
     targetName = DEFAULT_DEPLOYMENT_TARGET,
-  ): Promise<AlertsExportSummary> {
+    selectedUids?: string[],
+  ): Promise<ExportSelectedAlertsSummary> {
     if (!instanceName) {
-      throw new Error("Choose a concrete Grafana instance and deployment target for alerts export.");
+      throw new Error("Choose a concrete Grafana instance and deployment target for alerts pull.");
     }
 
     const target = await this.repository.deploymentTargetByName(instanceName, targetName);
@@ -212,60 +603,578 @@ export class DashboardService {
     const client = await this.clientFactory(instanceName);
     this.log.info(`Exporting alerts from ${instanceName}/${targetName}`);
 
-    const [alertRulesRaw, contactPointsRaw] = await Promise.all([
-      client.exportAlertRulesRaw(),
-      client.exportContactPointsRaw(),
+    const [remoteRules, remoteContactPoints] = await Promise.all([
+      client.listAlertRules(),
+      client.listContactPoints(),
     ]);
 
-    const fileSpecs: Array<{
-      kind: AlertsExportFileResult["kind"];
-      relativePath: string;
-      targetPath: string;
-      sourceContent: string;
-    }> = [
-      {
-        kind: "alertRules",
-        relativePath: path.posix.join("alerts", instanceName, targetName, "alert-rules.json"),
-        targetPath: this.repository.alertRulesExportPath(instanceName, targetName),
-        sourceContent: alertRulesRaw,
+    const ruleByUid = new Map<string, Record<string, unknown>>();
+    for (const rule of remoteRules) {
+      const uid = alertUid(rule);
+      if (uid) {
+        ruleByUid.set(uid, rule);
+      }
+    }
+
+    const requestedUids = [...new Set((selectedUids ?? []).map((uid) => uid.trim()).filter(Boolean))];
+    const effectiveUids = requestedUids.length > 0 ? requestedUids : [...ruleByUid.keys()].sort((a, b) => a.localeCompare(b));
+    if (effectiveUids.length === 0) {
+      throw new Error(`No alert rules available in ${instanceName}.`);
+    }
+    const missingUids = effectiveUids.filter((uid) => !ruleByUid.has(uid));
+    if (missingUids.length > 0) {
+      throw new Error(`Selected alert rules are not available in ${instanceName}: ${missingUids.join(", ")}`);
+    }
+
+    const nowIso = new Date().toISOString();
+    const targetRoot = this.repository.alertsRootPath(instanceName, target.name);
+    const remoteContactPointsByName = new Map<string, Array<Record<string, unknown>>>();
+    for (const contactPoint of remoteContactPoints) {
+      const name = typeof contactPoint.name === "string" ? contactPoint.name.trim() : "";
+      if (!name) {
+        continue;
+      }
+      const bucket = remoteContactPointsByName.get(name) ?? [];
+      bucket.push(contactPoint);
+      remoteContactPointsByName.set(name, bucket);
+    }
+
+    const previousManifest = await this.repository.loadAlertsManifest(instanceName, target.name);
+    const nextManifest: AlertsManifest = {
+      ...previousManifest,
+      generatedAt: previousManifest.generatedAt,
+      rules: {
+        ...previousManifest.rules,
       },
-      {
-        kind: "contactPoints",
-        relativePath: path.posix.join("alerts", instanceName, targetName, "contact-points.json"),
-        targetPath: this.repository.contactPointsExportPath(instanceName, targetName),
-        sourceContent: contactPointsRaw,
+      contactPoints: {
+        ...previousManifest.contactPoints,
       },
-    ];
+    };
 
     let updatedCount = 0;
     let skippedCount = 0;
-    const fileResults: AlertsExportFileResult[] = [];
+    const fileResults: AlertStorageFileResult[] = [];
 
-    for (const spec of fileSpecs) {
-      const outcome = await this.repository.syncPulledFile({
-        sourceContent: spec.sourceContent,
-        targetPath: spec.targetPath,
+    const makeRelativePath = (targetPath: string): string => path.relative(this.repository.projectRootPath, targetPath).replace(/\\/g, "/");
+    const usedContactPointKeys = new Set(Object.keys(nextManifest.contactPoints));
+
+    for (const uid of effectiveUids) {
+      const remoteRule = ruleByUid.get(uid)!;
+      const normalizedRule = normalizeAlertRuleForStorage(remoteRule);
+      const rulePath = this.repository.alertRuleFilePath(instanceName, target.name, uid);
+      const relativeRulePath = path.relative(targetRoot, rulePath).replace(/\\/g, "/");
+      const ruleOutcome = await this.repository.syncPulledFile({
+        sourceContent: stableJsonStringify(normalizedRule),
+        targetPath: rulePath,
       });
-      if (outcome.status === "updated") {
+      if (ruleOutcome.status === "updated") {
         updatedCount += 1;
       } else {
         skippedCount += 1;
       }
       fileResults.push({
-        kind: spec.kind,
-        relativePath: spec.relativePath,
-        status: outcome.status,
-        targetPath: spec.targetPath,
+        kind: "rule",
+        relativePath: makeRelativePath(rulePath),
+        status: ruleOutcome.status,
+        targetPath: rulePath,
       });
+
+      const receiver = alertReceiver(remoteRule);
+      const linkedContactPoints = receiver ? (remoteContactPointsByName.get(receiver) ?? []) : [];
+      const contactPointKeys: string[] = [];
+      let contactPointStatus: AlertLinkStatus = "policy-managed";
+      if (receiver) {
+        contactPointStatus = linkedContactPoints.length > 0 ? "linked" : "missing";
+      }
+
+      for (const remoteContactPoint of linkedContactPoints) {
+        const normalizedContactPoint = normalizeContactPointForStorage(remoteContactPoint);
+        const preferredKey = contactPointKeyFor(normalizedContactPoint);
+        let key = preferredKey;
+        let suffix = 2;
+        while (usedContactPointKeys.has(key) && nextManifest.contactPoints[key]?.uid !== normalizedContactPoint.uid) {
+          key = `${preferredKey}__${suffix}`;
+          suffix += 1;
+        }
+        usedContactPointKeys.add(key);
+        contactPointKeys.push(key);
+
+        const contactPointPath = this.repository.alertContactPointFilePath(instanceName, target.name, key);
+        const relativeContactPointPath = path.relative(targetRoot, contactPointPath).replace(/\\/g, "/");
+        const contactPointOutcome = await this.repository.syncPulledFile({
+          sourceContent: stableJsonStringify(normalizedContactPoint),
+          targetPath: contactPointPath,
+        });
+        if (contactPointOutcome.status === "updated") {
+          updatedCount += 1;
+        } else {
+          skippedCount += 1;
+        }
+        fileResults.push({
+          kind: "contactPoint",
+          relativePath: makeRelativePath(contactPointPath),
+          status: contactPointOutcome.status,
+          targetPath: contactPointPath,
+        });
+
+        nextManifest.contactPoints[key] = {
+          key,
+          path: relativeContactPointPath,
+          name: typeof normalizedContactPoint.name === "string" ? normalizedContactPoint.name : key,
+          ...(typeof normalizedContactPoint.uid === "string" && normalizedContactPoint.uid.trim()
+            ? { uid: normalizedContactPoint.uid.trim() }
+            : {}),
+          ...(typeof normalizedContactPoint.type === "string" && normalizedContactPoint.type.trim()
+            ? { type: normalizedContactPoint.type.trim() }
+            : {}),
+        };
+      }
+
+      const previousEntry = nextManifest.rules[uid];
+      nextManifest.rules[uid] = {
+        uid,
+        title: alertTitle(remoteRule),
+        path: relativeRulePath,
+        contactPointKeys: [...new Set(contactPointKeys)].sort((a, b) => a.localeCompare(b)),
+        contactPointStatus,
+        lastExportedAt: ruleOutcome.status === "updated" ? nowIso : previousEntry?.lastExportedAt ?? nowIso,
+        ...(previousEntry?.lastAppliedAt ? { lastAppliedAt: previousEntry.lastAppliedAt } : {}),
+      };
     }
+
+    const manifestPath = this.repository.alertsManifestPath(instanceName, target.name);
+    const manifestOutcome = await this.repository.syncPulledFile({
+      sourceContent: stableJsonStringify(nextManifest),
+      targetPath: manifestPath,
+    });
+    if (manifestOutcome.status === "updated") {
+      updatedCount += 1;
+    } else {
+      skippedCount += 1;
+    }
+    fileResults.push({
+      kind: "manifest",
+      relativePath: makeRelativePath(manifestPath),
+      status: manifestOutcome.status,
+      targetPath: manifestPath,
+    });
 
     return {
       instanceName,
       targetName: target.name,
       outputDir: this.repository.alertsRootPath(instanceName, target.name),
+      manifestPath,
+      selectedCount: effectiveUids.length,
       updatedCount,
       skippedCount,
       fileResults,
+    };
+  }
+
+  async exportSelectedAlerts(
+    instanceName: string,
+    targetName: string,
+    alertUids: string[],
+  ): Promise<ExportSelectedAlertsSummary> {
+    return this.exportAlerts(instanceName, targetName, alertUids);
+  }
+
+  private async alertSyncStatus(
+    record: AlertRuleRecord,
+  ): Promise<{ syncStatus: AlertSyncStatus; syncDetail?: string }> {
+    if (!record.exists) {
+      return {
+        syncStatus: "local-only",
+        syncDetail: "Local alert file is missing.",
+      };
+    }
+
+    const localRule = await this.repository.readJsonFile<Record<string, unknown>>(record.absolutePath);
+    const normalizedLocalRule = normalizeAlertRuleForUpload(localRule);
+    const client = await this.clientFactory(record.instanceName);
+
+    let remoteRule: Record<string, unknown> | undefined;
+    try {
+      remoteRule = await client.getAlertRule(record.uid);
+    } catch (error) {
+      if (!this.isGrafanaNotFoundError(error)) {
+        return {
+          syncStatus: "diverged",
+          syncDetail: String(error),
+        };
+      }
+    }
+
+    if (!remoteRule) {
+      return {
+        syncStatus: record.lastAppliedAt ? "missing-remote" : "local-only",
+      };
+    }
+
+    const remoteRuleWithPauseState = await this.ruleWithGroupPauseState(client, remoteRule);
+    const normalizedRemoteRule = normalizeAlertRuleForUpload(remoteRuleWithPauseState);
+    if (stableJsonStringify(normalizedRemoteRule) === stableJsonStringify(normalizedLocalRule)) {
+      return { syncStatus: "in-sync" };
+    }
+    return { syncStatus: "diverged" };
+  }
+
+  async buildTargetAlertSummaryRows(
+    instanceName: string,
+    targetName: string,
+  ): Promise<Array<{ uid: string; title: string; contactPointStatus: AlertLinkStatus; syncStatus: AlertSyncStatus; syncDetail?: string }>> {
+    const records = await this.repository.listTargetAlertRecords(instanceName, targetName);
+    return Promise.all(
+      records.map(async (record) => {
+        const sync = await this.alertSyncStatus(record);
+        return {
+          uid: record.uid,
+          title: record.title,
+          contactPointStatus: record.contactPointStatus,
+          syncStatus: sync.syncStatus,
+          ...(sync.syncDetail ? { syncDetail: sync.syncDetail } : {}),
+        };
+      }),
+    );
+  }
+
+  async loadAlertDetails(
+    instanceName: string,
+    targetName: string,
+    uid: string,
+  ): Promise<AlertDetailsModel | undefined> {
+    const record = await this.repository.alertRecordByUid(instanceName, targetName, uid);
+    if (!record) {
+      return undefined;
+    }
+    const manifest = await this.repository.loadAlertsManifest(instanceName, targetName);
+    const contactPoints = await Promise.all(
+      record.contactPointKeys.map(async (key) => {
+        const entry = manifest.contactPoints[key];
+        if (!entry) {
+          return undefined;
+        }
+        const absolutePath = path.join(this.repository.alertsRootPath(instanceName, targetName), entry.path);
+        return {
+          key,
+          path: entry.path,
+          absolutePath,
+          exists: (await this.repository.readTextFileIfExists(absolutePath)) !== undefined,
+          name: entry.name,
+          ...(entry.uid ? { uid: entry.uid } : {}),
+          ...(entry.type ? { type: entry.type } : {}),
+        };
+      }),
+    );
+    const localRule = record.exists
+      ? await this.repository.readJsonFile<Record<string, unknown>>(record.absolutePath).catch(() => undefined)
+      : undefined;
+    const sync = await this.alertSyncStatus(record);
+    return {
+      rule: record,
+      contactPoints: contactPoints.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry)),
+      isPaused: localRule ? alertIsPaused(localRule) : false,
+      datasourceSelection: localRule ? alertDatasourceSelectionModel(localRule) : undefined,
+      syncStatus: sync.syncStatus,
+      ...(sync.syncDetail ? { syncDetail: sync.syncDetail } : {}),
+    };
+  }
+
+  async saveAlertSettings(
+    instanceName: string,
+    targetName: string,
+    uid: string,
+    settings: {
+      isPaused: boolean;
+      datasourceUid?: string;
+      datasourceName?: string;
+    },
+  ): Promise<string> {
+    const record = await this.repository.alertRecordByUid(instanceName, targetName, uid);
+    if (!record) {
+      throw new Error(`Alert is not exported locally: ${uid}`);
+    }
+    if (!record.exists) {
+      throw new Error(`Local alert file is missing: ${uid}`);
+    }
+
+    let nextRule = await this.repository.readJsonFile<Record<string, unknown>>(record.absolutePath);
+    nextRule = {
+      ...nextRule,
+      isPaused: settings.isPaused,
+    };
+    if (settings.datasourceUid?.trim()) {
+      nextRule = applyAlertDatasourceSelection(nextRule, {
+        uid: settings.datasourceUid.trim(),
+        ...(settings.datasourceName?.trim() ? { name: settings.datasourceName.trim() } : {}),
+      });
+    }
+
+    await this.repository.saveAlertRuleJson(instanceName, targetName, uid, nextRule);
+    return record.absolutePath;
+  }
+
+  async copyAlertToTarget(
+    sourceInstanceName: string,
+    sourceTargetName: string,
+    uid: string,
+    destinationInstanceName: string,
+    destinationTargetName: string,
+    datasourceSelection?: { uid: string; name?: string },
+  ): Promise<CopyAlertSummary> {
+    const sourceTarget = await this.repository.deploymentTargetByName(sourceInstanceName, sourceTargetName);
+    if (!sourceTarget) {
+      throw new Error(`Deployment target not found: ${sourceInstanceName}/${sourceTargetName}`);
+    }
+    const destinationTarget = await this.repository.deploymentTargetByName(destinationInstanceName, destinationTargetName);
+    if (!destinationTarget) {
+      throw new Error(`Deployment target not found: ${destinationInstanceName}/${destinationTargetName}`);
+    }
+
+    const sourceManifest = await this.repository.loadAlertsManifest(sourceInstanceName, sourceTarget.name);
+    const sourceEntry = sourceManifest.rules[uid];
+    if (!sourceEntry) {
+      throw new Error(`Alert is not exported locally: ${uid}`);
+    }
+
+    const localRule = await this.repository.readAlertRuleJson(sourceInstanceName, sourceTarget.name, uid);
+    if (!localRule) {
+      throw new Error(`Local alert file is missing: ${uid}`);
+    }
+
+    const destinationManifest = await this.repository.loadAlertsManifest(destinationInstanceName, destinationTarget.name);
+    let destinationUid = randomUUID();
+    while (destinationManifest.rules[destinationUid]) {
+      destinationUid = randomUUID();
+    }
+
+    let nextRule = normalizeAlertRuleForStorage(localRule);
+    nextRule = {
+      ...nextRule,
+      uid: destinationUid,
+    };
+    if (datasourceSelection?.uid.trim()) {
+      nextRule = applyAlertDatasourceSelection(nextRule, {
+        uid: datasourceSelection.uid.trim(),
+        ...(datasourceSelection.name?.trim() ? { name: datasourceSelection.name.trim() } : {}),
+      });
+    }
+
+    const copiedContactPointKeys: string[] = [];
+    for (const sourceKey of sourceEntry.contactPointKeys) {
+      const localContactPoint = await this.repository.readAlertContactPointJson(sourceInstanceName, sourceTarget.name, sourceKey);
+      if (!localContactPoint) {
+        continue;
+      }
+
+      const nextContactPoint = normalizeContactPointForStorage({
+        ...localContactPoint,
+        uid: randomUUID(),
+      });
+      const preferredKey = contactPointKeyFor(nextContactPoint);
+      let key = preferredKey;
+      let suffix = 2;
+      while (destinationManifest.contactPoints[key]) {
+        key = `${preferredKey}__${suffix}`;
+        suffix += 1;
+      }
+
+      const contactPointPath = this.repository.alertContactPointFilePath(destinationInstanceName, destinationTarget.name, key);
+      const relativeContactPointPath = path
+        .relative(this.repository.alertsRootPath(destinationInstanceName, destinationTarget.name), contactPointPath)
+        .replace(/\\/g, "/");
+
+      await this.repository.writeJsonFile(contactPointPath, nextContactPoint);
+      destinationManifest.contactPoints[key] = {
+        key,
+        path: relativeContactPointPath,
+        name:
+          typeof nextContactPoint.name === "string" && nextContactPoint.name.trim()
+            ? nextContactPoint.name.trim()
+            : key,
+        ...(typeof nextContactPoint.uid === "string" && nextContactPoint.uid.trim()
+          ? { uid: nextContactPoint.uid.trim() }
+          : {}),
+        ...(typeof nextContactPoint.type === "string" && nextContactPoint.type.trim()
+          ? { type: nextContactPoint.type.trim() }
+          : {}),
+      };
+      copiedContactPointKeys.push(key);
+    }
+
+    const rulePath = this.repository.alertRuleFilePath(destinationInstanceName, destinationTarget.name, destinationUid);
+    const relativeRulePath = path
+      .relative(this.repository.alertsRootPath(destinationInstanceName, destinationTarget.name), rulePath)
+      .replace(/\\/g, "/");
+    await this.repository.writeJsonFile(rulePath, nextRule);
+
+    destinationManifest.generatedAt = new Date().toISOString();
+    destinationManifest.rules[destinationUid] = {
+      uid: destinationUid,
+      title: alertTitle(nextRule),
+      path: relativeRulePath,
+      contactPointKeys: copiedContactPointKeys.sort((left, right) => left.localeCompare(right)),
+      contactPointStatus: sourceEntry.contactPointStatus,
+    };
+    await this.repository.saveAlertsManifest(destinationInstanceName, destinationTarget.name, destinationManifest);
+
+    return {
+      sourceInstanceName,
+      sourceTargetName: sourceTarget.name,
+      sourceUid: uid,
+      destinationInstanceName,
+      destinationTargetName: destinationTarget.name,
+      destinationUid,
+      copiedContactPointCount: copiedContactPointKeys.length,
+    };
+  }
+
+  async uploadAlert(
+    instanceName: string,
+    targetName: string,
+    uid: string,
+  ): Promise<UploadAlertSummary> {
+    const target = await this.repository.deploymentTargetByName(instanceName, targetName);
+    if (!target) {
+      throw new Error(`Deployment target not found: ${instanceName}/${targetName}`);
+    }
+
+    const manifest = await this.repository.loadAlertsManifest(instanceName, target.name);
+    const entry = manifest.rules[uid];
+    if (!entry) {
+      throw new Error(`Alert is not exported locally: ${uid}`);
+    }
+
+    const rulePath = path.join(this.repository.alertsRootPath(instanceName, target.name), entry.path);
+    const localRule = await this.repository.readJsonFile<Record<string, unknown>>(rulePath);
+    const normalizedLocalRule = normalizeAlertRuleForUpload(localRule);
+
+    const client = await this.clientFactory(instanceName);
+    let remoteRule: Record<string, unknown> | undefined;
+    try {
+      remoteRule = await client.getAlertRule(uid);
+    } catch (error) {
+      if (!this.isGrafanaNotFoundError(error)) {
+        throw error;
+      }
+    }
+
+    const remoteContactPoints = await client.listContactPoints();
+    const remoteContactPointsByUid = new Map<string, Record<string, unknown>>();
+    const remoteContactPointsByName = new Map<string, Array<Record<string, unknown>>>();
+    for (const remoteContactPoint of remoteContactPoints) {
+      const remoteUid = typeof remoteContactPoint.uid === "string" ? remoteContactPoint.uid.trim() : "";
+      if (remoteUid) {
+        remoteContactPointsByUid.set(remoteUid, remoteContactPoint);
+      }
+      const remoteName = typeof remoteContactPoint.name === "string" ? remoteContactPoint.name.trim() : "";
+      if (!remoteName) {
+        continue;
+      }
+      const bucket = remoteContactPointsByName.get(remoteName) ?? [];
+      bucket.push(remoteContactPoint);
+      remoteContactPointsByName.set(remoteName, bucket);
+    }
+
+    const contactPointResults: AlertUploadContactPointResult[] = [];
+    for (const key of entry.contactPointKeys) {
+      const localContactPoint = await this.repository.readAlertContactPointJson(instanceName, target.name, key);
+      if (!localContactPoint) {
+        continue;
+      }
+      const normalizedLocalContactPoint = normalizeContactPointForUpload(localContactPoint);
+      const localUid =
+        typeof normalizedLocalContactPoint.uid === "string" && normalizedLocalContactPoint.uid.trim()
+          ? normalizedLocalContactPoint.uid.trim()
+          : undefined;
+      const localName =
+        typeof normalizedLocalContactPoint.name === "string" && normalizedLocalContactPoint.name.trim()
+          ? normalizedLocalContactPoint.name.trim()
+          : undefined;
+
+      const matchedRemote =
+        (localUid ? remoteContactPointsByUid.get(localUid) : undefined) ??
+        (localName ? (remoteContactPointsByName.get(localName) ?? [])[0] : undefined);
+
+      if (matchedRemote) {
+        const normalizedRemoteContactPoint = normalizeContactPointForUpload(matchedRemote);
+        if (stableJsonStringify(normalizedRemoteContactPoint) === stableJsonStringify(normalizedLocalContactPoint)) {
+          contactPointResults.push({ key, status: "skipped" });
+          continue;
+        }
+
+        const matchedRemoteUid =
+          typeof matchedRemote.uid === "string" && matchedRemote.uid.trim()
+            ? matchedRemote.uid.trim()
+            : undefined;
+        if (matchedRemoteUid) {
+          await client.updateContactPoint(matchedRemoteUid, normalizedLocalContactPoint);
+          contactPointResults.push({ key, status: "updated" });
+          continue;
+        }
+      }
+
+      if (localUid) {
+        try {
+          await client.updateContactPoint(localUid, normalizedLocalContactPoint);
+          contactPointResults.push({ key, status: "updated" });
+          continue;
+        } catch (error) {
+          if (!this.isGrafanaNotFoundError(error)) {
+            throw error;
+          }
+        }
+      }
+
+      await client.createContactPoint(normalizedLocalContactPoint);
+      contactPointResults.push({ key, status: "updated" });
+    }
+
+    const directRuleStatus = await this.upsertAlertRuleWithGroupFallback(client, normalizedLocalRule, remoteRule);
+    const pauseRuleStatus = await this.syncAlertPauseStateWithGroup(client, normalizedLocalRule);
+    const ruleStatus =
+      directRuleStatus === "updated" || pauseRuleStatus === "updated"
+        ? "updated"
+        : "skipped";
+
+    manifest.rules[uid] = {
+      ...entry,
+      lastAppliedAt: new Date().toISOString(),
+    };
+    await this.repository.saveAlertsManifest(instanceName, target.name, manifest);
+
+    return {
+      instanceName,
+      targetName: target.name,
+      uid,
+      ruleStatus,
+      contactPointResults,
+      syncStatus: "in-sync",
+    };
+  }
+
+  async refreshAlertStatus(
+    instanceName: string,
+    targetName: string,
+    uid: string,
+  ): Promise<AlertSyncStatus> {
+    const record = await this.repository.alertRecordByUid(instanceName, targetName, uid);
+    if (!record) {
+      throw new Error(`Alert is not exported locally: ${uid}`);
+    }
+    const sync = await this.alertSyncStatus(record);
+    return sync.syncStatus;
+  }
+
+  async removeAlertFromProject(
+    instanceName: string,
+    targetName: string,
+    uid: string,
+  ): Promise<{ removedPaths: string[]; removedContactPointKeys: string[] }> {
+    const result = await this.repository.removeAlertFromProject(instanceName, targetName, uid);
+    return {
+      removedPaths: result.removedPaths,
+      removedContactPointKeys: result.removedContactPointKeys,
     };
   }
 

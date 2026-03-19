@@ -192,20 +192,118 @@ export interface PullSummary {
   dashboardResults: PullDashboardResult[];
 }
 
-export interface AlertsExportFileResult {
-  kind: "alertRules" | "contactPoints";
+export type AlertLinkStatus = "linked" | "missing" | "policy-managed";
+
+export type AlertSyncStatus = "in-sync" | "diverged" | "missing-remote" | "local-only";
+
+export interface AlertManifestRuleEntry {
+  uid: string;
+  title: string;
+  path: string;
+  contactPointKeys: string[];
+  contactPointStatus: AlertLinkStatus;
+  lastExportedAt?: string;
+  lastAppliedAt?: string;
+}
+
+export interface AlertManifestContactPointEntry {
+  key: string;
+  path: string;
+  name: string;
+  uid?: string;
+  type?: string;
+}
+
+export interface AlertsManifest {
+  version: 1;
+  instanceName: string;
+  targetName: string;
+  generatedAt: string;
+  rules: Record<string, AlertManifestRuleEntry>;
+  contactPoints: Record<string, AlertManifestContactPointEntry>;
+}
+
+export interface AlertRuleRecord {
+  uid: string;
+  title: string;
+  instanceName: string;
+  targetName: string;
+  path: string;
+  absolutePath: string;
+  exists: boolean;
+  contactPointKeys: string[];
+  contactPointStatus: AlertLinkStatus;
+  lastExportedAt?: string;
+  lastAppliedAt?: string;
+}
+
+export interface AlertContactPointRecord {
+  key: string;
+  path: string;
+  absolutePath: string;
+  exists: boolean;
+  name: string;
+  uid?: string;
+  type?: string;
+}
+
+export interface AlertDetailsModel {
+  rule: AlertRuleRecord;
+  contactPoints: AlertContactPointRecord[];
+  isPaused: boolean;
+  datasourceSelection?: AlertDatasourceSelectionModel;
+  syncStatus: AlertSyncStatus;
+  syncDetail?: string;
+}
+
+export interface AlertDatasourceSelectionModel {
+  refIds: string[];
+  sourceUids: string[];
+  sourceTypes: string[];
+  targetUid?: string;
+  targetName?: string;
+}
+
+export interface AlertStorageFileResult {
+  kind: "manifest" | "rule" | "contactPoint";
   relativePath: string;
   status: "updated" | "skipped";
   targetPath: string;
 }
 
-export interface AlertsExportSummary {
+export interface ExportSelectedAlertsSummary {
   instanceName: string;
   targetName: string;
   outputDir: string;
+  manifestPath: string;
+  selectedCount: number;
   updatedCount: number;
   skippedCount: number;
-  fileResults: AlertsExportFileResult[];
+  fileResults: AlertStorageFileResult[];
+}
+
+export interface AlertUploadContactPointResult {
+  key: string;
+  status: "updated" | "skipped";
+}
+
+export interface UploadAlertSummary {
+  instanceName: string;
+  targetName: string;
+  uid: string;
+  ruleStatus: "updated" | "skipped";
+  contactPointResults: AlertUploadContactPointResult[];
+  syncStatus: AlertSyncStatus;
+}
+
+export interface CopyAlertSummary {
+  sourceInstanceName: string;
+  sourceTargetName: string;
+  sourceUid: string;
+  destinationInstanceName: string;
+  destinationTargetName: string;
+  destinationUid: string;
+  copiedContactPointCount: number;
 }
 
 export type BackupScope = "dashboard" | "target" | "instance" | "multi-instance";
@@ -350,6 +448,12 @@ export interface GrafanaDatasourceSummary {
   isDefault?: boolean;
 }
 
+export interface GrafanaAlertRuleSummary {
+  uid: string;
+  title: string;
+  receiver?: string;
+}
+
 export interface GrafanaUpsertResponse {
   uid?: string;
   url?: string;
@@ -361,8 +465,15 @@ export interface GrafanaApi {
   listDashboards(): Promise<GrafanaDashboardSummary[]>;
   listDatasources(): Promise<GrafanaDatasourceSummary[]>;
   listFolders(parentUid?: string): Promise<GrafanaFolder[]>;
-  exportAlertRulesRaw(): Promise<string>;
-  exportContactPointsRaw(): Promise<string>;
+  listAlertRules(): Promise<Array<Record<string, unknown>>>;
+  getAlertRule(uid: string): Promise<Record<string, unknown>>;
+  getAlertRuleGroup(folderUid: string, group: string): Promise<Record<string, unknown>>;
+  createAlertRule(rule: Record<string, unknown>): Promise<Record<string, unknown>>;
+  updateAlertRule(uid: string, rule: Record<string, unknown>): Promise<Record<string, unknown>>;
+  updateAlertRuleGroup(folderUid: string, group: string, body: Record<string, unknown>): Promise<Record<string, unknown>>;
+  listContactPoints(): Promise<Array<Record<string, unknown>>>;
+  createContactPoint(contactPoint: Record<string, unknown>): Promise<Record<string, unknown>>;
+  updateContactPoint(uid: string, contactPoint: Record<string, unknown>): Promise<Record<string, unknown>>;
   createFolder(input: { title: string; uid?: string; parentUid?: string }): Promise<GrafanaFolder>;
   upsertDashboard(input: {
     dashboard: Record<string, unknown>;
@@ -447,4 +558,12 @@ export interface TargetDashboardSummaryRow {
   datasourceStatus: "complete" | "missing";
   liveStatus?: LiveTargetVersionStatus["state"];
   liveMatchedRevisionId?: string;
+}
+
+export interface TargetAlertSummaryRow {
+  uid: string;
+  title: string;
+  contactPointStatus: AlertLinkStatus;
+  syncStatus: AlertSyncStatus;
+  syncDetail?: string;
 }

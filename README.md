@@ -30,7 +30,7 @@ project-root/
   dashboards/
   backups/
   renders/
-  alerts/   # created on first alerts export
+  alerts/   # created on first alerts pull
 ```
 
 Minimal workspace marker:
@@ -82,22 +82,26 @@ renders/<instance>/<target>/
 
 Each render produces dashboard JSON files plus `.render-manifest.json` with resolved dashboard UIDs and target folders.
 
-### Alerts Export
+### Alerts Pull / Deploy
 
-- `Grafana Sync: Export Alerts`
+- `Grafana Sync: Pull Alerts`
+- `Grafana Sync: Deploy Alert`
 
-Exports Grafana-managed alerting resources for the selected deployment target into:
+`Pull Alerts` loads alert rules from Grafana for the selected deployment target and opens a multi-select picker.
+Selected rules are stored with linked contact points (direct receiver only).
+
+Stored layout:
 
 ```text
 alerts/<instance>/<target>/
+  manifest.json
+  rules/<alert-uid>.json
+  contact-points/<contact-point-key>.json
 ```
 
-Current export scope:
-
-- `alert-rules.json`
-- `contact-points.json`
-
-Files are stored as raw JSON payloads from Grafana. This workflow does not apply overrides and does not export policies/templates/mute timings in v1.
+Files are saved as pretty JSON with stable key ordering for readable diffs.
+`Deploy Alert` deploys one selected local alert (and its linked contact points) back to Grafana.
+If local and remote payloads are equal, upload is skipped.
 
 ### Deploy
 

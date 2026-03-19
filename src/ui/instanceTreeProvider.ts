@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 
 import { DashboardService } from "../core/dashboardService";
 import { ProjectRepository } from "../core/repository";
-import { DashboardRecord, DeploymentTargetRecord, InstanceRecord } from "../core/types";
+import { AlertRuleRecord, DashboardRecord, DeploymentTargetRecord, InstanceRecord } from "../core/types";
 
 type InstanceHealthState =
   | { kind: "ok" }
@@ -66,24 +66,47 @@ export class DeploymentTargetTreeItem extends vscode.TreeItem {
   constructor(
     readonly target: DeploymentTargetRecord,
     readonly dashboardCount: number,
+    readonly alertCount: number,
   ) {
     super(
       target.name,
-      dashboardCount > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
+      dashboardCount > 0 || alertCount > 0
+        ? vscode.TreeItemCollapsibleState.Collapsed
+        : vscode.TreeItemCollapsibleState.None,
     );
     this.contextValue = "grafanaDeploymentTarget";
     this.description = [
       "target",
       `${dashboardCount} dashboard${dashboardCount === 1 ? "" : "s"}`,
+      `${alertCount} alert${alertCount === 1 ? "" : "s"}`,
     ].join(", ");
     this.tooltip = new vscode.MarkdownString(
       [
         `**${target.instanceName}/${target.name}**`,
         "",
         `Dashboards: ${dashboardCount}`,
+        `Alerts: ${alertCount}`,
       ].join("\n"),
     );
     this.iconPath = new vscode.ThemeIcon("symbol-field");
+  }
+}
+
+export class InstanceTargetDashboardsGroupTreeItem extends vscode.TreeItem {
+  constructor(readonly target: DeploymentTargetRecord, readonly dashboardCount: number) {
+    super("Dashboards", dashboardCount > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
+    this.contextValue = "grafanaTargetDashboardsGroup";
+    this.description = `${dashboardCount} item${dashboardCount === 1 ? "" : "s"}`;
+    this.iconPath = new vscode.ThemeIcon("dashboard");
+  }
+}
+
+export class InstanceTargetAlertsGroupTreeItem extends vscode.TreeItem {
+  constructor(readonly target: DeploymentTargetRecord, readonly alertCount: number) {
+    super("Alerts", alertCount > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
+    this.contextValue = "grafanaTargetAlertsGroup";
+    this.description = `${alertCount} item${alertCount === 1 ? "" : "s"}`;
+    this.iconPath = new vscode.ThemeIcon("warning");
   }
 }
 
@@ -105,6 +128,27 @@ export class InstanceTargetDashboardTreeItem extends vscode.TreeItem {
       ].join("\n"),
     );
     this.iconPath = new vscode.ThemeIcon(record.exists ? "file-code" : "warning");
+  }
+}
+
+export class InstanceTargetAlertTreeItem extends vscode.TreeItem {
+  constructor(
+    readonly target: DeploymentTargetRecord,
+    readonly record: AlertRuleRecord,
+  ) {
+    super(record.title, vscode.TreeItemCollapsibleState.None);
+    this.contextValue = "grafanaInstanceAlert";
+    this.description = `${record.uid}, ${record.contactPointStatus}`;
+    this.tooltip = new vscode.MarkdownString(
+      [
+        `**${record.title} -> ${target.instanceName}/${target.name}**`,
+        "",
+        `UID: \`${record.uid}\``,
+        `Local file: \`${record.absolutePath}\``,
+        `Contact points: \`${record.contactPointStatus}\``,
+      ].join("\n"),
+    );
+    this.iconPath = new vscode.ThemeIcon(record.exists ? "warning" : "warning");
   }
 }
 
@@ -156,7 +200,15 @@ export class InstanceTreeProvider implements vscode.TreeDataProvider<vscode.Tree
       }
 
       if (element instanceof DeploymentTargetTreeItem) {
-        return this.targetChildren(repository, element.target);
+        return this.targetGroups(repository, element.target, element.dashboardCount, element.alertCount);
+      }
+
+      if (element instanceof InstanceTargetDashboardsGroupTreeItem) {
+        return this.targetDashboardChildren(repository, element.target);
+      }
+
+      if (element instanceof InstanceTargetAlertsGroupTreeItem) {
+        return this.targetAlertChildren(repository, element.target);
       }
 
       const instances = await repository.listInstances();
@@ -200,10 +252,28 @@ export class InstanceTreeProvider implements vscode.TreeDataProvider<vscode.Tree
     }
 
     const records = await repository.listDashboardRecords();
-    return targets.map((target) => new DeploymentTargetTreeItem(target, records.length));
+    const items = await Promise.all(
+      targets.map(async (target) => {
+        const alertCount = (await repository.listTargetAlertRecords(target.instanceName, target.name)).length;
+        return new DeploymentTargetTreeItem(target, records.length, alertCount);
+      }),
+    );
+    return items;
   }
 
-  private async targetChildren(repository: ProjectRepository, target: DeploymentTargetRecord): Promise<vscode.TreeItem[]> {
+  private async targetGroups(
+    repository: ProjectRepository,
+    target: DeploymentTargetRecord,
+    dashboardCount: number,
+    alertCount: number,
+  ): Promise<vscode.TreeItem[]> {
+    return [
+      new InstanceTargetDashboardsGroupTreeItem(target, dashboardCount),
+      new InstanceTargetAlertsGroupTreeItem(target, alertCount),
+    ];
+  }
+
+  private async targetDashboardChildren(repository: ProjectRepository, target: DeploymentTargetRecord): Promise<vscode.TreeItem[]> {
     const records = await repository.listDashboardRecords();
     if (records.length === 0) {
       return [
@@ -215,6 +285,21 @@ export class InstanceTreeProvider implements vscode.TreeDataProvider<vscode.Tree
     }
 
     return records.map((record) => new InstanceTargetDashboardTreeItem(target, record));
+  }
+
+  private async targetAlertChildren(repository: ProjectRepository, target: DeploymentTargetRecord): Promise<vscode.TreeItem[]> {
+    const records = await repository.listTargetAlertRecords(target.instanceName, target.name);
+    if (records.length === 0) {
+      return [
+        new InstancePlaceholderItem("No alerts pulled yet. Use Pull Alerts.", {
+          command: "grafanaDashboards.exportAlerts",
+          title: "Pull Alerts",
+          arguments: [new DeploymentTargetTreeItem(target, 0, 0)],
+        }),
+      ];
+    }
+
+    return records.map((record) => new InstanceTargetAlertTreeItem(target, record));
   }
 
   private async instanceHealth(repository: ProjectRepository, instance: InstanceRecord): Promise<InstanceHealthState> {

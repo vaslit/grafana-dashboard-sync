@@ -67,8 +67,8 @@
    - folder placement
    - target-specific dashboard UID
 4. Выполнить `render` для нужных targets.
-5. При необходимости выполнить `Grafana Sync: Export Alerts` для нужного target.
-6. Проверить render output и exported alerts.
+5. При необходимости выполнить `Grafana Sync: Pull Alerts` для нужного target.
+6. Проверить render output и pulled alerts.
 7. Закоммитить изменения в git.
 
 ## Работа С Дашбордами
@@ -189,30 +189,45 @@ Render использует:
 - variable overrides
 - placement overrides
 
-## Alerts Export
+## Alerts Pull
 
 Команда:
 
-- `Grafana Sync: Export Alerts`
+- `Grafana Sync: Pull Alerts`
 
 Что делает:
 
-- выгружает Grafana-managed `alert rules` и `contact points` для выбранного `instance/target`
-- сохраняет raw JSON как есть из API Grafana
+- загружает список rule из Grafana и дает выбрать конкретные alerts
+- для выбранных alerts сохраняет сами rules и связанные `contact points` (по прямому receiver)
+- сохраняет pretty JSON (читаемый diff)
 
 Куда сохраняет:
 
 ```text
 alerts/<instance>/<target>/
-  alert-rules.json
-  contact-points.json
+  manifest.json
+  rules/<alert-uid>.json
+  contact-points/<contact-point-key>.json
 ```
 
 Важно:
 
-- `Export Alerts` не ограничен `dev target` (в отличие от `pull` dashboards)
-- в v1 нет override для query/message
-- в v1 не выгружаются `policies`, `templates`, `mute timings`
+- `Pull Alerts` не ограничен `dev target` (в отличие от `pull` dashboards)
+- связь alert -> contact point в v1 только прямая (без полного resolve по policies)
+- для alert без прямого receiver в details будет статус `policy-managed`
+
+## Deploy Alert
+
+Команда:
+
+- `Grafana Sync: Deploy Alert`
+
+Что делает:
+
+- загружает выбранный локальный alert обратно в Grafana
+- перед upload сравнивает локальную и текущую remote-версию
+- если отличий нет, upload пропускается
+- если alert связан с локальными contact points, они тоже upsert-ятся
 
 ## Deploy
 
