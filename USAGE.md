@@ -36,13 +36,33 @@
 - `Working Copy`:
   локально checkout-нутая ревизия файла в проекте
 
+## Структура Проекта
+
+Поддерживается только текущий layout:
+
+```text
+project-root/
+  .grafana-dashboard-workspace.json
+  dashboards/
+  backups/
+  renders/
+  alerts/   # появится после первого Pull Alerts
+```
+
+Важно:
+
+- отдельная filesystem-based папка `instances/` больше не используется
+- instances, targets, dashboards и datasource mappings хранятся в `.grafana-dashboard-workspace.json`
+- `GRAFANA_URL` и `GRAFANA_USERNAME` сохраняются в config файла проекта
+- token и password хранятся в VS Code Secret Storage
+
 ## Быстрый Старт
 
 1. Открой папку проекта в VS Code.
 2. Выполни `Grafana Sync: Initialize Grafana Dashboard Project`.
 3. В дереве `Instances` создай instance:
    - `Grafana Sync: Create Instance`
-4. Для instance задай `GRAFANA_URL`.
+4. Для instance задай `GRAFANA_URL` в `Details > Instance`.
 5. Настрой аутентификацию instance:
    - либо `Grafana Sync: Set Instance Token`
    - либо укажи `GRAFANA_USERNAME` и сохрани пароль командой `Grafana Sync: Set Instance Password`
@@ -111,6 +131,23 @@
 ## Datasources
 
 Datasource mappings настраиваются в `Details > Datasources`.
+
+Формат хранения в `.grafana-dashboard-workspace.json`:
+
+```json
+{
+  "datasources": {
+    "integration": {
+      "instances": {
+        "prod": {
+          "uid": "target-ds",
+          "name": "Target Datasource"
+        }
+      }
+    }
+  }
+}
+```
 
 Основной сценарий:
 
@@ -285,7 +322,7 @@ Backups особенно полезны перед deploy или перед ма
 - если у instance сохранен token, плагин использует его
 - если token не задан, но сохранены `GRAFANA_USERNAME` и пароль, плагин использует basic auth
 - пароль хранится в VS Code Secret Storage
-- username хранится в конфигурации проекта
+- `GRAFANA_URL` и username хранятся в `.grafana-dashboard-workspace.json`
 
 Команды:
 

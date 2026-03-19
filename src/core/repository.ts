@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { parseEnv, stringifyEnv } from "./env";
 import { stableJsonStringify } from "./json";
 import { findManifestEntryBySelector, selectorNameForEntry, validateManifest } from "./manifest";
 import { PROJECT_CONFIG_FILE, ProjectLayout, defaultProjectLayout } from "./projectLocator";
@@ -62,11 +61,7 @@ async function removeFileIfExists(filePath: string): Promise<boolean> {
   return true;
 }
 
-async function copyDirectoryTree(
-  sourceDir: string,
-  targetDir: string,
-  options?: { sanitizeEnvFiles?: boolean },
-): Promise<void> {
+async function copyDirectoryTree(sourceDir: string, targetDir: string): Promise<void> {
   if (!(await exists(sourceDir))) {
     return;
   }
@@ -78,15 +73,7 @@ async function copyDirectoryTree(
     const targetPath = path.join(targetDir, entry.name);
 
     if (entry.isDirectory()) {
-      await copyDirectoryTree(sourcePath, targetPath, options);
-      continue;
-    }
-
-    if (options?.sanitizeEnvFiles && entry.name === ".env") {
-      const content = await fs.readFile(sourcePath, "utf8");
-      const parsed = parseEnv(content);
-      const { GRAFANA_TOKEN: _ignored, ...safeValues } = parsed;
-      await fs.writeFile(targetPath, stringifyEnv(safeValues), "utf8");
+      await copyDirectoryTree(sourcePath, targetPath);
       continue;
     }
 
@@ -361,9 +348,6 @@ function validateWorkspaceProjectConfig(config: WorkspaceProjectConfig, filePath
     if (typeof value !== "string" || !value.trim()) {
       throw new Error(`Invalid workspace config ${key}: ${filePath}`);
     }
-  }
-  if (config.layout.instancesDir !== undefined && (typeof config.layout.instancesDir !== "string" || !config.layout.instancesDir.trim())) {
-    throw new Error(`Invalid workspace config instancesDir: ${filePath}`);
   }
   if (
     typeof config.layout.maxBackups !== "number" ||
@@ -693,14 +677,9 @@ export class ProjectRepository {
   readonly projectRootPath: string;
   readonly workspaceConfigPath: string;
   readonly configPath?: string;
-  readonly manifestPath: string;
-  readonly datasourceCatalogPath: string;
-  readonly manifestExamplePath: string;
   readonly dashboardsDir: string;
-  readonly instancesDir: string;
   readonly backupsDir: string;
   readonly rendersDir: string;
-  readonly rootEnvPath: string;
   readonly maxBackups: number;
   private readonly resolveToken: (instanceName?: string) => Promise<string | undefined>;
   private readonly resolvePassword: (instanceName?: string) => Promise<string | undefined>;
@@ -711,14 +690,9 @@ export class ProjectRepository {
     this.projectRootPath = layout.projectRootPath;
     this.workspaceConfigPath = layout.workspaceConfigPath;
     this.configPath = layout.configPath;
-    this.manifestPath = layout.manifestPath;
-    this.datasourceCatalogPath = path.join(layout.projectRootPath, "datasources.json");
-    this.manifestExamplePath = layout.manifestExamplePath;
     this.dashboardsDir = layout.dashboardsDir;
-    this.instancesDir = layout.instancesDir;
     this.backupsDir = layout.backupsDir;
     this.rendersDir = layout.rendersDir;
-    this.rootEnvPath = layout.rootEnvPath;
     this.maxBackups = layout.maxBackups;
     this.resolveToken = options?.resolveToken ?? (async () => undefined);
     this.resolvePassword = options?.resolvePassword ?? (async () => undefined);
@@ -819,14 +793,6 @@ export class ProjectRepository {
     return this.targetOverridePath(instanceName, DEFAULT_DEPLOYMENT_TARGET, entry);
   }
 
-  instanceEnvPath(instanceName: string): string {
-    return path.join(this.instancesDir, instanceName, ".env");
-  }
-
-  instanceEnvExamplePath(instanceName: string): string {
-    return path.join(this.instancesDir, instanceName, ".env.example");
-  }
-
   async readJsonFile<T>(filePath: string): Promise<T> {
     return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
   }
@@ -859,14 +825,9 @@ export class ProjectRepository {
         projectRootPath: this.projectRootPath,
         workspaceConfigPath: this.workspaceConfigPath,
         configPath: this.configPath,
-        manifestPath: this.manifestPath,
-        manifestExamplePath: this.manifestExamplePath,
-        legacyDatasourceCatalogPath: this.datasourceCatalogPath,
         dashboardsDir: this.dashboardsDir,
-        instancesDir: this.instancesDir,
         backupsDir: this.backupsDir,
         rendersDir: this.rendersDir,
-        rootEnvPath: this.rootEnvPath,
         maxBackups: this.maxBackups,
       });
     }
@@ -878,10 +839,8 @@ export class ProjectRepository {
   async saveWorkspaceConfig(config: WorkspaceProjectConfig): Promise<void> {
     const validConfig = validateWorkspaceProjectConfig(config, this.workspaceConfigPath);
     await this.ensureProjectLayout();
-    const { instancesDir: _legacyInstancesDir, ...layout } = validConfig.layout;
     await this.writeJsonFile(this.workspaceConfigPath, {
       ...validConfig,
-      layout,
     });
   }
 
@@ -922,8 +881,9 @@ export class ProjectRepository {
 
   async createManifestFromExample(): Promise<void> {
     await this.ensureProjectLayout();
-    if (await exists(this.manifestExamplePath)) {
-      const manifest = await this.readJsonFile<DashboardManifest>(this.manifestExamplePath);
+    const manifestExamplePath = path.join(this.projectRootPath, "dashboard-manifest.example.json");
+    if (await exists(manifestExamplePath)) {
+      const manifest = await this.readJsonFile<DashboardManifest>(manifestExamplePath);
       const errors = validateManifest(manifest);
       if (errors.length > 0) {
         throw new Error(errors.join("\n"));
@@ -1307,7 +1267,6 @@ export class ProjectRepository {
         dirPath,
         envPath: this.workspaceConfigPath,
         envExists: Boolean(config.instances[instanceName]?.grafanaUrl),
-        envExamplePath: this.instanceEnvExamplePath(instanceName),
       });
     }
 
@@ -1344,7 +1303,6 @@ export class ProjectRepository {
       dirPath,
       envPath: this.workspaceConfigPath,
       envExists: Boolean(config.instances[sanitized]?.grafanaUrl),
-      envExamplePath: this.instanceEnvExamplePath(sanitized),
     };
   }
 

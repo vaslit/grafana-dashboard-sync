@@ -4,13 +4,9 @@ import path from "node:path";
 export const PROJECT_CONFIG_FILE = ".grafana-dashboard-workspace.json";
 
 const DEFAULT_LAYOUT = {
-  manifest: "dashboard-manifest.json",
-  manifestExample: "dashboard-manifest.example.json",
   dashboardsDir: "dashboards",
-  instancesDir: "instances",
   backupsDir: "backups",
   rendersDir: "renders",
-  rootEnv: ".env",
 } as const;
 
 const IGNORED_DIR_NAMES = new Set([
@@ -27,22 +23,13 @@ const MAX_SCAN_DEPTH = 5;
 const DEFAULT_MAX_BACKUPS = 20;
 
 interface ProjectConfigFile {
-  version?: number;
+  version: 4;
   layout?: {
     dashboardsDir?: string;
-    instancesDir?: string;
     backupsDir?: string;
     rendersDir?: string;
     maxBackups?: number;
   };
-  manifest?: string;
-  manifestExample?: string;
-  dashboardsDir?: string;
-  instancesDir?: string;
-  backupsDir?: string;
-  rendersDir?: string;
-  rootEnv?: string;
-  maxBackups?: number;
 }
 
 export interface ProjectLayout {
@@ -51,14 +38,9 @@ export interface ProjectLayout {
   configPath?: string;
   selectionNote?: string;
   workspaceConfigPath: string;
-  manifestPath: string;
-  manifestExamplePath: string;
-  legacyDatasourceCatalogPath: string;
   dashboardsDir: string;
-  instancesDir: string;
   backupsDir: string;
   rendersDir: string;
-  rootEnvPath: string;
   maxBackups: number;
 }
 
@@ -111,44 +93,29 @@ function buildProjectLayout(
     configPath: options?.configPath,
     selectionNote: options?.selectionNote,
     workspaceConfigPath: options?.configPath ?? path.join(projectRootPath, PROJECT_CONFIG_FILE),
-    manifestPath: resolveRelativePath(projectRootPath, config?.manifest, DEFAULT_LAYOUT.manifest, "manifest"),
-    manifestExamplePath: resolveRelativePath(
-      projectRootPath,
-      config?.manifestExample,
-      DEFAULT_LAYOUT.manifestExample,
-      "manifestExample",
-    ),
-    legacyDatasourceCatalogPath: path.join(projectRootPath, "datasources.json"),
     dashboardsDir: resolveRelativePath(
       projectRootPath,
-      layoutConfig?.dashboardsDir ?? config?.dashboardsDir,
+      layoutConfig?.dashboardsDir,
       DEFAULT_LAYOUT.dashboardsDir,
       "dashboardsDir",
     ),
-    instancesDir: resolveRelativePath(
-      projectRootPath,
-      layoutConfig?.instancesDir ?? config?.instancesDir,
-      DEFAULT_LAYOUT.instancesDir,
-      "instancesDir",
-    ),
     backupsDir: resolveRelativePath(
       projectRootPath,
-      layoutConfig?.backupsDir ?? config?.backupsDir,
+      layoutConfig?.backupsDir,
       DEFAULT_LAYOUT.backupsDir,
       "backupsDir",
     ),
     rendersDir: resolveRelativePath(
       projectRootPath,
-      layoutConfig?.rendersDir ?? config?.rendersDir,
+      layoutConfig?.rendersDir,
       DEFAULT_LAYOUT.rendersDir,
       "rendersDir",
     ),
-    rootEnvPath: resolveRelativePath(projectRootPath, config?.rootEnv, DEFAULT_LAYOUT.rootEnv, "rootEnv"),
     maxBackups:
-      typeof (layoutConfig?.maxBackups ?? config?.maxBackups) === "number" &&
-      Number.isInteger(layoutConfig?.maxBackups ?? config?.maxBackups) &&
-      (layoutConfig?.maxBackups ?? config?.maxBackups)! > 0
-        ? (layoutConfig?.maxBackups ?? config?.maxBackups)!
+      typeof layoutConfig?.maxBackups === "number" &&
+      Number.isInteger(layoutConfig.maxBackups) &&
+      layoutConfig.maxBackups > 0
+        ? layoutConfig.maxBackups
         : DEFAULT_MAX_BACKUPS,
   };
 }
@@ -160,22 +127,12 @@ async function loadProjectConfig(configPath: string): Promise<ProjectConfigFile>
   }
 
   const config = parsed as Record<string, unknown>;
-  const stringFields = [
-    "manifest",
-    "manifestExample",
-    "dashboardsDir",
-    "instancesDir",
-    "backupsDir",
-    "rendersDir",
-    "rootEnv",
-  ] as const;
-
   if (config.layout !== undefined) {
     if (!config.layout || typeof config.layout !== "object" || Array.isArray(config.layout)) {
       throw new Error(`layout in ${PROJECT_CONFIG_FILE} must be an object when provided.`);
     }
     const layout = config.layout as Record<string, unknown>;
-    const layoutStringFields = ["dashboardsDir", "instancesDir", "backupsDir", "rendersDir"] as const;
+    const layoutStringFields = ["dashboardsDir", "backupsDir", "rendersDir"] as const;
     for (const field of layoutStringFields) {
       const value = layout[field];
       if (value !== undefined && typeof value !== "string") {
@@ -190,25 +147,11 @@ async function loadProjectConfig(configPath: string): Promise<ProjectConfigFile>
     }
   }
 
-  for (const field of stringFields) {
-    const value = config[field];
-    if (value !== undefined && typeof value !== "string") {
-      throw new Error(`${field} in ${PROJECT_CONFIG_FILE} must be a string when provided.`);
-    }
-  }
-
-  if (
-    config.maxBackups !== undefined &&
-    (typeof config.maxBackups !== "number" || !Number.isInteger(config.maxBackups) || config.maxBackups <= 0)
-  ) {
-    throw new Error(`maxBackups in ${PROJECT_CONFIG_FILE} must be a positive integer when provided.`);
-  }
-
-  if (config.version !== undefined && config.version !== 1 && config.version !== 2 && config.version !== 3 && config.version !== 4) {
+  if (config.version !== 4) {
     throw new Error(`Unsupported ${PROJECT_CONFIG_FILE} version: ${String(config.version)}.`);
   }
 
-  return config as ProjectConfigFile;
+  return config as unknown as ProjectConfigFile;
 }
 
 async function scanForCandidates(

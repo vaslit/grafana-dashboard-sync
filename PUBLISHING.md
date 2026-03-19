@@ -4,7 +4,7 @@ This repository is prepared for a public release under these defaults:
 
 - GitHub repository: `vaslit/grafana-dashboard-sync`
 - VS Code Marketplace publisher: `vaslit`
-- Extension version: `0.9.2`
+- Extension version: `0.9.4`
 
 ## GitHub Releases Automation
 
@@ -19,6 +19,12 @@ Automation behavior:
 - creates or updates the matching GitHub Release
 - uploads `grafana-dashboard-sync-<version>.vsix`
 - supports manual `workflow_dispatch` with `force_release=true` for a one-off release without a version bump
+
+Important:
+
+- the release workflow only publishes on pushes to `main`
+- if you push a fix without changing `version`, the workflow stops after version detection and does not publish a new VSIX
+- for releaseable extension changes, bump both [package.json](package.json) and [package-lock.json](package-lock.json)
 
 If your actual GitHub owner or Marketplace publisher differs, update [package.json](package.json) before publishing.
 
@@ -78,5 +84,5 @@ npm run package
 Expected artifact:
 
 ```text
-grafana-dashboard-sync-0.8.17.vsix
+grafana-dashboard-sync-0.9.4.vsix
 ```

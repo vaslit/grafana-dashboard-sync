@@ -23,7 +23,6 @@ export interface WorkspaceProjectConfig {
   version: 4;
   layout: {
     dashboardsDir: string;
-    instancesDir?: string;
     backupsDir: string;
     rendersDir: string;
     maxBackups: number;
@@ -141,7 +140,6 @@ export interface InstanceRecord {
   dirPath: string;
   envPath: string;
   envExists: boolean;
-  envExamplePath: string;
 }
 
 export interface DeploymentTargetRecord {

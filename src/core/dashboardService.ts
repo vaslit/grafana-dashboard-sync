@@ -503,6 +503,7 @@ export class DashboardService {
   private async syncAlertPauseStateWithGroup(
     client: GrafanaApi,
     rule: Record<string, unknown>,
+    options?: { forceUpdate?: boolean },
   ): Promise<"updated" | "skipped"> {
     const uid = alertUid(rule);
     const folderUid = alertFolderUid(rule);
@@ -553,7 +554,7 @@ export class DashboardService {
       changed = true;
     }
 
-    if (!changed) {
+    if (!changed && options?.forceUpdate !== true) {
       return "skipped";
     }
 
@@ -1131,7 +1132,9 @@ export class DashboardService {
     }
 
     const directRuleStatus = await this.upsertAlertRuleWithGroupFallback(client, normalizedLocalRule, remoteRule);
-    const pauseRuleStatus = await this.syncAlertPauseStateWithGroup(client, normalizedLocalRule);
+    const pauseRuleStatus = await this.syncAlertPauseStateWithGroup(client, normalizedLocalRule, {
+      forceUpdate: !remoteRule,
+    });
     const ruleStatus =
       directRuleStatus === "updated" || pauseRuleStatus === "updated"
         ? "updated"

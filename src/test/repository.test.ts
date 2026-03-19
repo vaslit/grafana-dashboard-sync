@@ -112,11 +112,6 @@ test("migrateDeploymentTargets is disabled for version 4 projects", async () => 
 
     await repository.saveManifest({ dashboards: [entry] });
     await repository.createInstance("prod");
-    await repository.writeJsonFile(path.join(repository.instancesDir, "prod", entry.path), {
-      variables: {
-        site: "rnd",
-      },
-    });
 
     const changed = await repository.migrateDeploymentTargets();
 
@@ -225,20 +220,20 @@ test("updateManifestEntry migrates override key when base dashboard uid changes"
   });
 });
 
-test("listInstances does not create instances directory during read-only access", async () => {
+test("listInstances does not create filesystem state during read-only access", async () => {
   const rootPath = await fs.mkdtemp(path.join(os.tmpdir(), "grafana-dashboard-readonly-"));
   const repository = new ProjectRepository(rootPath);
 
   try {
     const instances = await repository.listInstances();
     assert.deepEqual(instances, []);
-    await assert.rejects(fs.stat(repository.instancesDir));
+    assert.equal(await repository.readTextFileIfExists(repository.workspaceConfigPath), undefined);
   } finally {
     await fs.rm(rootPath, { recursive: true, force: true });
   }
 });
 
-test("saveInstanceEnvValues strips GRAFANA_TOKEN from stored file", async () => {
+test("saveInstanceEnvValues stores only non-secret instance config in workspace config", async () => {
   await withTempProject(async (_rootPath, repository) => {
     await repository.createInstance("prod");
     await repository.saveInstanceEnvValues("prod", {
@@ -258,7 +253,7 @@ test("saveInstanceEnvValues strips GRAFANA_TOKEN from stored file", async () => 
   });
 });
 
-test("removeInstance deletes instance directory", async () => {
+test("removeInstance deletes instance config", async () => {
   await withTempProject(async (_rootPath, repository) => {
     await repository.createInstance("prod");
     await repository.saveInstanceEnvValues("prod", {

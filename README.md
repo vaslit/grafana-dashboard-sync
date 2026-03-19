@@ -26,25 +26,39 @@ Default layout:
 ```text
 project-root/
   .grafana-dashboard-workspace.json
-  dashboard-manifest.json
   dashboards/
   backups/
   renders/
   alerts/   # created on first alerts pull
 ```
 
-Minimal workspace marker:
+Supported workspace config:
 
 ```json
 {
-  "version": 1,
-  "maxBackups": 20
+  "version": 4,
+  "layout": {
+    "dashboardsDir": "dashboards",
+    "backupsDir": "backups",
+    "rendersDir": "renders",
+    "maxBackups": 20
+  },
+  "dashboards": [],
+  "datasources": {},
+  "instances": {
+    "dev": {
+      "grafanaUrl": "http://localhost:3000",
+      "targets": {
+        "default": {}
+      }
+    }
+  }
 }
 ```
 
 You can keep the Grafana project at the workspace root or inside a subfolder. The `Grafana Sync: Initialize Grafana Dashboard Project` command bootstraps the required structure.
 
-Instance and deployment-target definitions live in `.grafana-dashboard-workspace.json`, not in a dedicated `instances/` folder.
+Instance and deployment-target definitions live in `.grafana-dashboard-workspace.json`. Filesystem-based `instances/` layouts are not supported.
 
 ## Getting Started
 
@@ -52,9 +66,10 @@ Instance and deployment-target definitions live in `.grafana-dashboard-workspace
 2. Run `Grafana Sync: Initialize Grafana Dashboard Project` if the project structure does not exist yet.
 3. Create one or more instances in the `Instances` view.
 4. Configure authentication for each instance:
+   - set `GRAFANA_URL` in `Details > Instance`
    - `Grafana Sync: Set Instance Token`
    - or `GRAFANA_USERNAME` + `Grafana Sync: Set Instance Password`
-5. Add dashboards to the manifest or pull them from a remote Grafana instance.
+5. Add dashboards to the project or pull them from a remote Grafana instance.
 6. Render and deploy using the activity bar views or command palette.
 
 ## Core Workflows
@@ -64,7 +79,7 @@ Instance and deployment-target definitions live in `.grafana-dashboard-workspace
 - `Grafana Sync: Pull Dashboard From Dev Target`
 - pull actions from the `Dashboards` and `Instances` trees use the same dev-target rule
 
-These commands fetch dashboards from the selected instance and persist them into `dashboards/` according to the manifest.
+These commands fetch dashboards from the selected instance and persist them into `dashboards/` according to the workspace config manifest.
 
 ### Render
 
@@ -143,16 +158,19 @@ Example:
 ```json
 {
   "datasources": {
-    "Source Datasource": {
-      "sourceUid": "source-uid",
-      "uid": "target-uid",
-      "name": "Target Datasource"
+    "integration": {
+      "instances": {
+        "prod": {
+          "uid": "target-uid",
+          "name": "Target Datasource"
+        }
+      }
     }
   }
 }
 ```
 
-When the selected instance is reachable, the `Details` panel can load remote datasource options for direct editing.
+The datasource key is the project-wide source name used in local dashboard JSON. When the selected instance is reachable, the `Details` panel can load remote datasource options for direct editing.
 
 ## Credentials
 
