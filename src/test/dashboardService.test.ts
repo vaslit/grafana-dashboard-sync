@@ -19,13 +19,28 @@ import {
 } from "../core/types";
 
 class MockGrafanaClient implements GrafanaApi {
+  private readonly alertRules: Array<Record<string, unknown>>;
+  private readonly alertContactPoints: Array<Record<string, unknown>>;
+  private readonly operationLog?: string[];
+
   constructor(
     private readonly dashboardResponse: GrafanaDashboardResponse,
     private readonly folders: GrafanaFolder[],
     private readonly onUpsert: (payload: { dashboard: Record<string, unknown>; folderUid?: string; message: string }) => void,
     private readonly datasources: GrafanaDatasourceSummary[] = [],
     private readonly onGetDashboardByUid: (uid: string) => void = () => {},
-  ) {}
+    private readonly alertExport?: {
+      rules?: Array<Record<string, unknown>>;
+      contactPoints?: Array<Record<string, unknown>>;
+      failAlertRules?: boolean;
+      failContactPoints?: boolean;
+      operationLog?: string[];
+    },
+  ) {
+    this.alertRules = [...(alertExport?.rules ?? [])];
+    this.alertContactPoints = [...(alertExport?.contactPoints ?? [])];
+    this.operationLog = alertExport?.operationLog;
+  }
 
   async getDashboardByUid(uid: string): Promise<GrafanaDashboardResponse> {
     this.onGetDashboardByUid(uid);
@@ -42,6 +57,102 @@ class MockGrafanaClient implements GrafanaApi {
 
   async listFolders(parentUid?: string): Promise<GrafanaFolder[]> {
     return [...this.folders].filter((folder) => (parentUid ? folder.parentUid === parentUid : !folder.parentUid));
+  }
+
+  async listAlertRules(): Promise<Array<Record<string, unknown>>> {
+    if (this.alertExport?.failAlertRules) {
+      throw new Error("alert rules export failed");
+    }
+    return this.alertRules.map((rule) => structuredClone(rule));
+  }
+
+  async getAlertRule(uid: string): Promise<Record<string, unknown>> {
+    this.operationLog?.push(`getAlertRule:${uid}`);
+    const rule = this.alertRules.find((candidate) => (candidate.uid as string | undefined) === uid);
+    if (!rule) {
+      throw new Error(`Grafana API GET /api/v1/provisioning/alert-rules/${uid} failed with 404: not found`);
+    }
+    return structuredClone(rule);
+  }
+
+  async getAlertRuleGroup(folderUid: string, group: string): Promise<Record<string, unknown>> {
+    this.operationLog?.push(`getAlertRuleGroup:${folderUid}/${group}`);
+    const rules = this.alertRules.filter(
+      (candidate) =>
+        ((candidate.folderUID as string | undefined) ?? (candidate.folderUid as string | undefined)) === folderUid &&
+        (candidate.ruleGroup as string | undefined) === group,
+    );
+    if (rules.length === 0) {
+      throw new Error(
+        `Grafana API GET /api/v1/provisioning/folder/${folderUid}/rule-groups/${group} failed with 404: not found`,
+      );
+    }
+    return {
+      folderUID: folderUid,
+      interval: "1m",
+      name: group,
+      rules: rules.map((rule) => structuredClone(rule)),
+    };
+  }
+
+  async createAlertRule(rule: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this.operationLog?.push(`createAlertRule:${(rule.uid as string | undefined) ?? ""}`);
+    const uid = (rule.uid as string | undefined) ?? "";
+    this.alertRules.push(structuredClone(rule));
+    return {
+      uid,
+      ...structuredClone(rule),
+    };
+  }
+
+  async updateAlertRule(uid: string, rule: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this.operationLog?.push(`updateAlertRule:${uid}`);
+    const index = this.alertRules.findIndex((candidate) => (candidate.uid as string | undefined) === uid);
+    if (index === -1) {
+      throw new Error(`Grafana API PUT /api/v1/provisioning/alert-rules/${uid} failed with 404: not found`);
+    }
+    this.alertRules[index] = structuredClone(rule);
+    return structuredClone(rule);
+  }
+
+  async updateAlertRuleGroup(folderUid: string, group: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this.operationLog?.push(`updateAlertRuleGroup:${folderUid}/${group}`);
+    const rules = Array.isArray(body.rules) ? body.rules.map((rule) => structuredClone(rule as Record<string, unknown>)) : [];
+    this.alertRules.splice(
+      0,
+      this.alertRules.length,
+      ...this.alertRules.filter(
+        (candidate) =>
+          ((candidate.folderUID as string | undefined) ?? (candidate.folderUid as string | undefined)) !== folderUid ||
+          (candidate.ruleGroup as string | undefined) !== group,
+      ),
+      ...rules,
+    );
+    return structuredClone(body);
+  }
+
+  async listContactPoints(): Promise<Array<Record<string, unknown>>> {
+    this.operationLog?.push("listContactPoints");
+    if (this.alertExport?.failContactPoints) {
+      throw new Error("contact points export failed");
+    }
+    return this.alertContactPoints.map((contactPoint) => structuredClone(contactPoint));
+  }
+
+  async createContactPoint(contactPoint: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this.operationLog?.push(`createContactPoint:${(contactPoint.uid as string | undefined) ?? ""}`);
+    this.alertContactPoints.push(structuredClone(contactPoint));
+    return structuredClone(contactPoint);
+  }
+
+  async updateContactPoint(uid: string, contactPoint: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this.operationLog?.push(`updateContactPoint:${uid}`);
+    const index = this.alertContactPoints.findIndex((candidate) => (candidate.uid as string | undefined) === uid);
+    if (index === -1) {
+      throw new Error(`Grafana API PUT /api/v1/provisioning/contact-points/${uid} failed with 404: not found`);
+    }
+    this.alertContactPoints[index] = structuredClone(contactPoint);
+    return structuredClone(contactPoint);
   }
 
   async createFolder(input: { title: string; uid?: string; parentUid?: string }): Promise<GrafanaFolder> {
@@ -426,6 +537,424 @@ test("pullDashboards accepts mismatched remote dashboard uid and normalizes the 
 
     const dashboard = await repository.readJsonFile<Record<string, unknown>>(repository.dashboardPath(entry));
     assert.equal(dashboard.uid, entry.uid);
+  });
+});
+
+test("exportAlerts writes selected alert and linked contact point files, then skips unchanged content", async () => {
+  await withTempProject(async (repository, entry) => {
+    await repository.createInstance("prod");
+    await repository.createDeploymentTarget("prod", "blue");
+    await repository.writeJsonFile(repository.dashboardPath(entry), {
+      title: "Status",
+      uid: entry.uid,
+    });
+
+    const service = new DashboardService(
+      repository,
+      logger(),
+      async () =>
+        new MockGrafanaClient(
+          {
+            dashboard: {
+              title: "unused",
+              uid: entry.uid,
+            },
+            meta: {},
+          },
+          [],
+          () => {},
+          [],
+          () => {},
+          {
+            rules: [
+              {
+                uid: "alert-cpu-high",
+                title: "CPU High",
+                id: 10,
+                updated: "2026-03-01T00:00:00Z",
+                notification_settings: {
+                  receiver: "oncall",
+                },
+              },
+            ],
+            contactPoints: [
+              {
+                uid: "cp-oncall",
+                name: "oncall",
+                type: "email",
+                settings: {
+                  addresses: "ops@example.com",
+                },
+              },
+            ],
+          },
+        ),
+    );
+
+    const first = await service.exportSelectedAlerts("prod", "blue", ["alert-cpu-high"]);
+    assert.equal(first.instanceName, "prod");
+    assert.equal(first.targetName, "blue");
+    assert.equal(first.selectedCount, 1);
+    assert.equal(first.updatedCount, 3);
+    assert.equal(first.skippedCount, 0);
+    assert.equal(first.outputDir, repository.alertsRootPath("prod", "blue"));
+    const manifest = await repository.readAlertsManifest("prod", "blue");
+    assert.ok(manifest);
+    assert.ok(manifest?.rules["alert-cpu-high"]);
+    const savedRule = await repository.readAlertRuleJson("prod", "blue", "alert-cpu-high");
+    assert.equal((savedRule?.uid as string | undefined) ?? "", "alert-cpu-high");
+    assert.equal((savedRule?.id as number | undefined) ?? 0, 0);
+    assert.equal(savedRule?.id, undefined);
+    assert.equal(
+      await repository.readTextFileIfExists(repository.alertContactPointFilePath("prod", "blue", "uid__cp-oncall")),
+      "{\n  \"name\": \"oncall\",\n  \"settings\": {\n    \"addresses\": \"ops@example.com\"\n  },\n  \"type\": \"email\",\n  \"uid\": \"cp-oncall\"\n}\n",
+    );
+
+    const second = await service.exportSelectedAlerts("prod", "blue", ["alert-cpu-high"]);
+    assert.equal(second.updatedCount, 0);
+    assert.equal(second.skippedCount, 3);
+    assert.deepEqual(
+      second.fileResults.map((result) => result.status),
+      ["skipped", "skipped", "skipped"],
+    );
+  });
+});
+
+test("exportAlerts does not write partial files when one export endpoint fails", async () => {
+  await withTempProject(async (repository, entry) => {
+    await repository.createInstance("prod");
+    await repository.createDeploymentTarget("prod", "blue");
+    await repository.writeJsonFile(repository.dashboardPath(entry), {
+      title: "Status",
+      uid: entry.uid,
+    });
+
+    const service = new DashboardService(
+      repository,
+      logger(),
+      async () =>
+        new MockGrafanaClient(
+          {
+            dashboard: {
+              title: "unused",
+              uid: entry.uid,
+            },
+            meta: {},
+          },
+          [],
+          () => {},
+          [],
+          () => {},
+          {
+            failContactPoints: true,
+          },
+        ),
+    );
+
+    await assert.rejects(service.exportSelectedAlerts("prod", "blue", ["missing-alert"]), /contact points export failed/);
+    assert.equal(await repository.readTextFileIfExists(repository.alertsManifestPath("prod", "blue")), undefined);
+    assert.equal(await repository.readTextFileIfExists(repository.alertRuleFilePath("prod", "blue", "missing-alert")), undefined);
+  });
+});
+
+test("saveAlertSettings updates isPaused and rewrites all non-expression datasource refs", async () => {
+  await withTempProject(async (repository, entry) => {
+    await repository.createInstance("prod");
+    await repository.createDeploymentTarget("prod", "blue");
+    await repository.writeJsonFile(repository.dashboardPath(entry), {
+      title: "Status",
+      uid: entry.uid,
+    });
+    await repository.saveAlertsManifest("prod", "blue", {
+      version: 1,
+      instanceName: "prod",
+      targetName: "blue",
+      generatedAt: "2026-03-19T00:00:00.000Z",
+      rules: {
+        "alert-a": {
+          uid: "alert-a",
+          title: "Alert A",
+          path: "rules/alert-a.json",
+          contactPointKeys: [],
+          contactPointStatus: "policy-managed",
+        },
+      },
+      contactPoints: {},
+    });
+    await repository.writeJsonFile(repository.alertRuleFilePath("prod", "blue", "alert-a"), {
+      uid: "alert-a",
+      title: "Alert A",
+      isPaused: false,
+      data: [
+        {
+          refId: "A",
+          datasourceUid: "mongo-a",
+          model: {
+            datasource: {
+              uid: "mongo-a",
+              name: "Mongo A",
+              type: "mongodb",
+            },
+          },
+        },
+        {
+          refId: "B",
+          datasourceUid: "mongo-b",
+          model: {
+            datasource: {
+              uid: "mongo-b",
+              name: "Mongo B",
+              type: "mongodb",
+            },
+          },
+        },
+        {
+          refId: "C",
+          datasourceUid: "__expr__",
+          model: {
+            datasource: {
+              uid: "__expr__",
+              type: "__expr__",
+            },
+          },
+        },
+      ],
+    });
+
+    const service = new DashboardService(
+      repository,
+      logger(),
+      async () =>
+        new MockGrafanaClient(
+          {
+            dashboard: {
+              title: "unused",
+              uid: entry.uid,
+            },
+            meta: {},
+          },
+          [],
+          () => {},
+        ),
+    );
+
+    await service.saveAlertSettings("prod", "blue", "alert-a", {
+      isPaused: true,
+      datasourceUid: "mongo-target",
+      datasourceName: "Mongo Target",
+    });
+
+    const savedRule = await repository.readAlertRuleJson("prod", "blue", "alert-a");
+    const data = Array.isArray(savedRule?.data) ? savedRule.data : [];
+    assert.equal(savedRule?.isPaused, true);
+    assert.equal((data[0] as Record<string, unknown>).datasourceUid, "mongo-target");
+    assert.equal((data[1] as Record<string, unknown>).datasourceUid, "mongo-target");
+    assert.equal((data[2] as Record<string, unknown>).datasourceUid, "__expr__");
+    assert.equal(
+      (((data[0] as Record<string, unknown>).model as Record<string, unknown>).datasource as Record<string, unknown>).name,
+      "Mongo Target",
+    );
+  });
+});
+
+test("copyAlertToTarget creates a new alert uid, new contact point ids, and clears sync timestamps", async () => {
+  await withTempProject(async (repository, entry) => {
+    await repository.createInstance("prod");
+    await repository.createDeploymentTarget("prod", "blue");
+    await repository.createInstance("qa");
+    await repository.createDeploymentTarget("qa", "green");
+    await repository.writeJsonFile(repository.dashboardPath(entry), {
+      title: "Status",
+      uid: entry.uid,
+    });
+    await repository.saveAlertsManifest("prod", "blue", {
+      version: 1,
+      instanceName: "prod",
+      targetName: "blue",
+      generatedAt: "2026-03-19T00:00:00.000Z",
+      rules: {
+        "alert-source": {
+          uid: "alert-source",
+          title: "Alert Source",
+          path: "rules/alert-source.json",
+          contactPointKeys: ["uid__cp-source"],
+          contactPointStatus: "linked",
+          lastExportedAt: "2026-03-19T01:00:00.000Z",
+          lastAppliedAt: "2026-03-19T02:00:00.000Z",
+        },
+      },
+      contactPoints: {
+        "uid__cp-source": {
+          key: "uid__cp-source",
+          path: "contact-points/uid__cp-source.json",
+          name: "Integration contact point",
+          uid: "cp-source",
+          type: "teams",
+        },
+      },
+    });
+    await repository.writeJsonFile(repository.alertRuleFilePath("prod", "blue", "alert-source"), {
+      uid: "alert-source",
+      title: "Alert Source",
+      notification_settings: {
+        receiver: "Integration contact point",
+      },
+      data: [
+        {
+          refId: "A",
+          datasourceUid: "mongo-source",
+          model: {
+            datasource: {
+              uid: "mongo-source",
+              name: "Mongo Source",
+              type: "mongodb",
+            },
+          },
+        },
+      ],
+    });
+    await repository.writeJsonFile(repository.alertContactPointFilePath("prod", "blue", "uid__cp-source"), {
+      uid: "cp-source",
+      name: "Integration contact point",
+      type: "teams",
+      settings: {
+        url: "https://example.com",
+      },
+    });
+
+    const service = new DashboardService(
+      repository,
+      logger(),
+      async () =>
+        new MockGrafanaClient(
+          {
+            dashboard: {
+              title: "unused",
+              uid: entry.uid,
+            },
+            meta: {},
+          },
+          [],
+          () => {},
+        ),
+    );
+
+    const summary = await service.copyAlertToTarget(
+      "prod",
+      "blue",
+      "alert-source",
+      "qa",
+      "green",
+      {
+        uid: "mongo-target",
+        name: "Mongo Target",
+      },
+    );
+
+    const destinationManifest = await repository.loadAlertsManifest("qa", "green");
+    const copiedEntry = destinationManifest.rules[summary.destinationUid];
+    const copiedRule = await repository.readAlertRuleJson("qa", "green", summary.destinationUid);
+    assert.notEqual(summary.destinationUid, "alert-source");
+    assert.ok(copiedEntry);
+    assert.equal(copiedEntry?.lastExportedAt, undefined);
+    assert.equal(copiedEntry?.lastAppliedAt, undefined);
+    assert.equal(copiedRule?.uid, summary.destinationUid);
+    assert.equal(
+      ((Array.isArray(copiedRule?.data) ? copiedRule.data[0] : undefined) as Record<string, unknown>).datasourceUid,
+      "mongo-target",
+    );
+    assert.equal(copiedEntry?.contactPointKeys.length, 1);
+    assert.notEqual(copiedEntry?.contactPointKeys[0], "uid__cp-source");
+    const copiedContactPoint = await repository.readAlertContactPointJson("qa", "green", copiedEntry!.contactPointKeys[0]!);
+    assert.ok(copiedContactPoint);
+    assert.notEqual(copiedContactPoint?.uid, "cp-source");
+  });
+});
+
+test("uploadAlert upserts contact points before creating the alert rule", async () => {
+  await withTempProject(async (repository, entry) => {
+    await repository.createInstance("prod");
+    await repository.createDeploymentTarget("prod", "blue");
+    await repository.writeJsonFile(repository.dashboardPath(entry), {
+      title: "Status",
+      uid: entry.uid,
+    });
+    await repository.saveAlertsManifest("prod", "blue", {
+      version: 1,
+      instanceName: "prod",
+      targetName: "blue",
+      generatedAt: "2026-03-19T00:00:00.000Z",
+      rules: {
+        "alert-a": {
+          uid: "alert-a",
+          title: "Alert A",
+          path: "rules/alert-a.json",
+          contactPointKeys: ["uid__cp-a"],
+          contactPointStatus: "linked",
+        },
+      },
+      contactPoints: {
+        "uid__cp-a": {
+          key: "uid__cp-a",
+          path: "contact-points/uid__cp-a.json",
+          name: "Integration contact point",
+          uid: "cp-a",
+          type: "teams",
+        },
+      },
+    });
+    await repository.writeJsonFile(repository.alertRuleFilePath("prod", "blue", "alert-a"), {
+      uid: "alert-a",
+      title: "Alert A",
+      folderUID: "folder-1",
+      ruleGroup: "integration",
+      isPaused: true,
+      notification_settings: {
+        receiver: "Integration contact point",
+      },
+      data: [],
+    });
+    await repository.writeJsonFile(repository.alertContactPointFilePath("prod", "blue", "uid__cp-a"), {
+      uid: "cp-a",
+      name: "Integration contact point",
+      type: "teams",
+      settings: {
+        url: "https://example.com",
+      },
+    });
+
+    const operationLog: string[] = [];
+    const service = new DashboardService(
+      repository,
+      logger(),
+      async () =>
+        new MockGrafanaClient(
+          {
+            dashboard: {
+              title: "unused",
+              uid: entry.uid,
+            },
+            meta: {},
+          },
+          [],
+          () => {},
+          [],
+          () => {},
+          {
+            rules: [],
+            contactPoints: [],
+            operationLog,
+          },
+        ),
+    );
+
+    await service.uploadAlert("prod", "blue", "alert-a");
+
+    assert.ok(operationLog.indexOf("createContactPoint:cp-a") >= 0);
+    assert.ok(operationLog.indexOf("createAlertRule:alert-a") >= 0);
+    assert.ok(operationLog.indexOf("updateAlertRuleGroup:folder-1/integration") >= 0);
+    assert.ok(operationLog.indexOf("createContactPoint:cp-a") < operationLog.indexOf("createAlertRule:alert-a"));
+    assert.ok(operationLog.indexOf("createAlertRule:alert-a") < operationLog.indexOf("updateAlertRuleGroup:folder-1/integration"));
   });
 });
 

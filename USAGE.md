@@ -13,6 +13,7 @@
 - настраивать datasource mappings
 - выполнять `render` для конкретных targets
 - делать `deploy` и `backup`
+- выгружать alerts (rules + contact points) по target
 
 Основная идея:
 
@@ -66,8 +67,9 @@
    - folder placement
    - target-specific dashboard UID
 4. Выполнить `render` для нужных targets.
-5. Проверить render output.
-6. Закоммитить изменения в git.
+5. При необходимости выполнить `Grafana Sync: Pull Alerts` для нужного target.
+6. Проверить render output и pulled alerts.
+7. Закоммитить изменения в git.
 
 ## Работа С Дашбордами
 
@@ -186,6 +188,46 @@ Render использует:
 - datasource mappings
 - variable overrides
 - placement overrides
+
+## Alerts Pull
+
+Команда:
+
+- `Grafana Sync: Pull Alerts`
+
+Что делает:
+
+- загружает список rule из Grafana и дает выбрать конкретные alerts
+- для выбранных alerts сохраняет сами rules и связанные `contact points` (по прямому receiver)
+- сохраняет pretty JSON (читаемый diff)
+
+Куда сохраняет:
+
+```text
+alerts/<instance>/<target>/
+  manifest.json
+  rules/<alert-uid>.json
+  contact-points/<contact-point-key>.json
+```
+
+Важно:
+
+- `Pull Alerts` не ограничен `dev target` (в отличие от `pull` dashboards)
+- связь alert -> contact point в v1 только прямая (без полного resolve по policies)
+- для alert без прямого receiver в details будет статус `policy-managed`
+
+## Deploy Alert
+
+Команда:
+
+- `Grafana Sync: Deploy Alert`
+
+Что делает:
+
+- загружает выбранный локальный alert обратно в Grafana
+- перед upload сравнивает локальную и текущую remote-версию
+- если отличий нет, upload пропускается
+- если alert связан с локальными contact points, они тоже upsert-ятся
 
 ## Deploy
 

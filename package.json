@@ -2,7 +2,7 @@
   "name": "grafana-dashboard-sync",
   "displayName": "Grafana Dashboard Sync",
   "description": "Manage Grafana dashboards from VS Code with pull, render, deploy, backup, and datasource mapping workflows.",
-  "version": "0.8.17",
+  "version": "0.9.3",
   "publisher": "vaslit",
   "license": "MIT",
   "repository": {
@@ -60,6 +60,11 @@
     "onCommand:grafanaDashboards.renderTarget",
     "onCommand:grafanaDashboards.renderInstance",
     "onCommand:grafanaDashboards.renderAllInstances",
+    "onCommand:grafanaDashboards.exportAlerts",
+    "onCommand:grafanaDashboards.uploadAlert",
+    "onCommand:grafanaDashboards.refreshAlertStatus",
+    "onCommand:grafanaDashboards.copyAlertToTarget",
+    "onCommand:grafanaDashboards.removeAlertFromProject",
     "onCommand:grafanaDashboards.openRenderFolder",
     "onCommand:grafanaDashboards.removeInstance"
   ],
@@ -175,6 +180,26 @@
       {
         "command": "grafanaDashboards.renderAllInstances",
         "title": "Grafana Sync: Render All Instances"
+      },
+      {
+        "command": "grafanaDashboards.exportAlerts",
+        "title": "Grafana Sync: Pull Alerts"
+      },
+      {
+        "command": "grafanaDashboards.uploadAlert",
+        "title": "Grafana Sync: Deploy Alert"
+      },
+      {
+        "command": "grafanaDashboards.refreshAlertStatus",
+        "title": "Grafana Sync: Refresh Alert Status"
+      },
+      {
+        "command": "grafanaDashboards.copyAlertToTarget",
+        "title": "Grafana Sync: Copy Alert To Target"
+      },
+      {
+        "command": "grafanaDashboards.removeAlertFromProject",
+        "title": "Grafana Sync: Remove Alert From Project"
       },
       {
         "command": "grafanaDashboards.openRenderFolder",
@@ -438,6 +463,11 @@
           "group": "navigation@7.5"
         },
         {
+          "command": "grafanaDashboards.exportAlerts",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
+          "group": "navigation@7.6"
+        },
+        {
           "command": "grafanaDashboards.setInstanceToken",
           "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
           "group": "navigation@7.75"
@@ -493,6 +523,31 @@
           "group": "navigation@4"
         },
         {
+          "command": "grafanaDashboards.exportAlerts",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstanceAlert",
+          "group": "navigation@1"
+        },
+        {
+          "command": "grafanaDashboards.copyAlertToTarget",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstanceAlert",
+          "group": "navigation@1.5"
+        },
+        {
+          "command": "grafanaDashboards.uploadAlert",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstanceAlert",
+          "group": "navigation@2"
+        },
+        {
+          "command": "grafanaDashboards.refreshAlertStatus",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstanceAlert",
+          "group": "navigation@3"
+        },
+        {
+          "command": "grafanaDashboards.removeAlertFromProject",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstanceAlert",
+          "group": "navigation@10"
+        },
+        {
           "command": "grafanaDashboards.pullDashboard",
           "when": "view == grafanaDashboards.instances && viewItem == grafanaDeploymentTarget",
           "group": "navigation@8.5"
@@ -511,6 +566,11 @@
           "command": "grafanaDashboards.createBackup",
           "when": "view == grafanaDashboards.instances && viewItem == grafanaDeploymentTarget",
           "group": "navigation@9.35"
+        },
+        {
+          "command": "grafanaDashboards.exportAlerts",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaDeploymentTarget",
+          "group": "navigation@9.4"
         },
         {
           "command": "grafanaDashboards.openRenderFolder",

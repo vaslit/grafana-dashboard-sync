@@ -15,6 +15,10 @@ import {
 export class GrafanaClient implements GrafanaApi {
   constructor(private readonly connection: EffectiveConnectionConfig) {}
 
+  private readonly editableAlertingHeaders: Record<string, string> = {
+    "X-Disable-Provenance": "true",
+  };
+
   async getDashboardByUid(uid: string): Promise<GrafanaDashboardResponse> {
     return this.requestJson<GrafanaDashboardResponse>("GET", `/api/dashboards/uid/${encodeURIComponent(uid)}`);
   }
@@ -109,6 +113,70 @@ export class GrafanaClient implements GrafanaApi {
       }));
   }
 
+  async listAlertRules(): Promise<Array<Record<string, unknown>>> {
+    return this.requestJson<Array<Record<string, unknown>>>("GET", "/api/v1/provisioning/alert-rules");
+  }
+
+  async getAlertRule(uid: string): Promise<Record<string, unknown>> {
+    return this.requestJson<Record<string, unknown>>("GET", `/api/v1/provisioning/alert-rules/${encodeURIComponent(uid)}`);
+  }
+
+  async getAlertRuleGroup(folderUid: string, group: string): Promise<Record<string, unknown>> {
+    return this.requestJson<Record<string, unknown>>(
+      "GET",
+      `/api/v1/provisioning/folder/${encodeURIComponent(folderUid)}/rule-groups/${encodeURIComponent(group)}`,
+    );
+  }
+
+  async createAlertRule(rule: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestJson<Record<string, unknown>>(
+      "POST",
+      "/api/v1/provisioning/alert-rules",
+      rule,
+      this.editableAlertingHeaders,
+    );
+  }
+
+  async updateAlertRule(uid: string, rule: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestJson<Record<string, unknown>>(
+      "PUT",
+      `/api/v1/provisioning/alert-rules/${encodeURIComponent(uid)}`,
+      rule,
+      this.editableAlertingHeaders,
+    );
+  }
+
+  async updateAlertRuleGroup(folderUid: string, group: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestJson<Record<string, unknown>>(
+      "PUT",
+      `/api/v1/provisioning/folder/${encodeURIComponent(folderUid)}/rule-groups/${encodeURIComponent(group)}`,
+      body,
+      this.editableAlertingHeaders,
+    );
+  }
+
+  async listContactPoints(): Promise<Array<Record<string, unknown>>> {
+    return this.requestJson<Array<Record<string, unknown>>>("GET", "/api/v1/provisioning/contact-points");
+  }
+
+  async createContactPoint(contactPoint: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestJson<Record<string, unknown>>(
+      "POST",
+      "/api/v1/provisioning/contact-points",
+      contactPoint,
+      this.editableAlertingHeaders,
+    );
+  }
+
+  async updateContactPoint(uid: string, contactPoint: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestJson<Record<string, unknown>>(
+      "PUT",
+      `/api/v1/provisioning/contact-points/${encodeURIComponent(uid)}`,
+      contactPoint,
+      this.editableAlertingHeaders,
+    );
+  }
+
   async createFolder(input: { title: string; uid?: string; parentUid?: string }): Promise<GrafanaFolder> {
     return this.requestJson<GrafanaFolder>("POST", "/api/folders", input);
   }
@@ -126,7 +194,30 @@ export class GrafanaClient implements GrafanaApi {
     });
   }
 
-  private async requestJson<T>(method: "GET" | "POST", requestPath: string, body?: unknown): Promise<T> {
+  private async requestJson<T>(
+    method: "GET" | "POST" | "PUT",
+    requestPath: string,
+    body?: unknown,
+    extraHeaders?: Record<string, string>,
+  ): Promise<T> {
+    const text = await this.requestRaw(method, requestPath, body, extraHeaders);
+    if (!text) {
+      return {} as T;
+    }
+
+    try {
+      return JSON.parse(text) as T;
+    } catch (error) {
+      throw new Error(`Failed to parse Grafana response from ${requestPath}: ${String(error)}`);
+    }
+  }
+
+  private async requestRaw(
+    method: "GET" | "POST" | "PUT",
+    requestPath: string,
+    body?: unknown,
+    extraHeaders?: Record<string, string>,
+  ): Promise<string> {
     const url = new URL(requestPath, `${this.connection.baseUrl}/`);
     const payload = body === undefined ? undefined : JSON.stringify(body);
     const client = url.protocol === "https:" ? https : http;
@@ -139,6 +230,7 @@ export class GrafanaClient implements GrafanaApi {
     const headers: Record<string, string | number> = {
       Accept: "application/json",
       Authorization: authorizationHeader,
+      ...extraHeaders,
     };
 
     if (payload !== undefined) {
@@ -146,7 +238,7 @@ export class GrafanaClient implements GrafanaApi {
       headers["Content-Length"] = Buffer.byteLength(payload);
     }
 
-    return new Promise<T>((resolve, reject) => {
+    return new Promise<string>((resolve, reject) => {
       const request = client.request(
         url,
         {
@@ -172,17 +264,7 @@ export class GrafanaClient implements GrafanaApi {
               );
               return;
             }
-
-            if (!text) {
-              resolve({} as T);
-              return;
-            }
-
-            try {
-              resolve(JSON.parse(text) as T);
-            } catch (error) {
-              reject(new Error(`Failed to parse Grafana response from ${url.pathname}: ${String(error)}`));
-            }
+            resolve(text);
           });
         },
       );

@@ -4,10 +4,11 @@ export class SelectionState {
   private readonly changeEmitter = new vscode.EventEmitter<void>();
 
   private dashboardSelectorName?: string;
+  private alertUid?: string;
   private instanceName?: string;
   private targetName?: string;
   private backupName?: string;
-  private detailsMode?: "dashboard" | "instance";
+  private detailsMode?: "dashboard" | "instance" | "alert";
   private activeDevInstanceName?: string;
   private activeDevTargetName?: string;
 
@@ -21,6 +22,10 @@ export class SelectionState {
     return this.instanceName;
   }
 
+  get selectedAlertUid(): string | undefined {
+    return this.alertUid;
+  }
+
   get selectedTargetName(): string | undefined {
     return this.targetName;
   }
@@ -29,7 +34,7 @@ export class SelectionState {
     return this.backupName;
   }
 
-  get selectedDetailsMode(): "dashboard" | "instance" | undefined {
+  get selectedDetailsMode(): "dashboard" | "instance" | "alert" | undefined {
     return this.detailsMode;
   }
 
@@ -46,6 +51,20 @@ export class SelectionState {
       return;
     }
     this.dashboardSelectorName = selectorName;
+    if (selectorName) {
+      this.alertUid = undefined;
+    }
+    this.changeEmitter.fire();
+  }
+
+  setAlert(uid: string | undefined): void {
+    if (this.alertUid === uid) {
+      return;
+    }
+    this.alertUid = uid;
+    if (uid) {
+      this.dashboardSelectorName = undefined;
+    }
     this.changeEmitter.fire();
   }
 
@@ -55,6 +74,7 @@ export class SelectionState {
     }
     this.instanceName = instanceName;
     this.targetName = undefined;
+    this.alertUid = undefined;
     this.changeEmitter.fire();
   }
 
@@ -63,6 +83,7 @@ export class SelectionState {
       return;
     }
     this.targetName = targetName;
+    this.alertUid = undefined;
     this.changeEmitter.fire();
   }
 
@@ -74,7 +95,7 @@ export class SelectionState {
     this.changeEmitter.fire();
   }
 
-  setDetailsMode(mode: "dashboard" | "instance" | undefined): void {
+  setDetailsMode(mode: "dashboard" | "instance" | "alert" | undefined): void {
     if (this.detailsMode === mode) {
       return;
     }

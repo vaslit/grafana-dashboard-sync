@@ -14,6 +14,7 @@ import {
   DashboardManifestEntry,
   DashboardRecord,
   DeploymentTargetRecord,
+  GrafanaDatasourceSummary,
   GrafanaDashboardSummary,
   InstanceRecord,
   LogSink,
@@ -35,6 +36,9 @@ import { DetailsViewProvider } from "./ui/detailsViewProvider";
 import {
   DevTargetTreeItem,
   DeploymentTargetTreeItem,
+  InstanceTargetAlertTreeItem,
+  InstanceTargetAlertsGroupTreeItem,
+  InstanceTargetDashboardsGroupTreeItem,
   InstanceTargetDashboardTreeItem,
   InstanceTreeItem,
   InstanceTreeProvider,
@@ -110,6 +114,20 @@ function datasourceSelectionsFromFormValues(
   }
 
   return selections;
+}
+
+function alertSettingsFromFormValues(values: Record<string, string>): {
+  isPaused: boolean;
+  datasourceUid?: string;
+  datasourceName?: string;
+} {
+  const datasourceUid = values.alert_target_uid?.trim();
+  const datasourceName = values.alert_target_name?.trim();
+  return {
+    isPaused: values.isPaused === "on",
+    datasourceUid: datasourceUid || undefined,
+    datasourceName: datasourceName || undefined,
+  };
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -226,6 +244,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     service = repository ? new DashboardService(repository, log) : undefined;
     selectionState.setDashboard(undefined);
+    selectionState.setAlert(undefined);
     selectionState.setBackup(undefined);
 
     if (!layout) {
@@ -339,6 +358,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
       service = new DashboardService(repository, log);
       selectionState.setDashboard(undefined);
+      selectionState.setAlert(undefined);
       selectionState.setInstance(initialInstanceName.trim());
       selectionState.setTarget(DEFAULT_DEPLOYMENT_TARGET);
       await refreshAll();
@@ -404,6 +424,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.window.showInformationMessage(
         `Rendered ${entries.length} dashboard(s) for ${renderedTargets} target(s) across all instances.`,
       );
+    },
+    exportAlerts: async () => {
+      await exportAlertsCommand(undefined, selectionState.selectedAlertUid ? [selectionState.selectedAlertUid] : undefined);
+    },
+    copySelectedAlertToTarget: async () => {
+      await copyAlertToTargetCommand();
+    },
+    uploadSelectedAlert: async () => {
+      await uploadAlertCommand();
+    },
+    refreshSelectedAlertStatus: async () => {
+      await refreshAlertStatusCommand();
     },
     openRenderFolder: async (instanceName?: string, targetName?: string) => {
       const repository = requireRepository();
@@ -628,6 +660,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.window.showInformationMessage(
         `Saved datasources for ${selectorName} on ${instanceName}.`,
       );
+    },
+    saveAlertSettings: async (
+      instanceName: string,
+      targetName: string,
+      uid: string,
+      values: Record<string, string>,
+    ) => {
+      const service = requireService();
+      const alertPath = await service.saveAlertSettings(
+        instanceName,
+        targetName,
+        uid,
+        alertSettingsFromFormValues(values),
+      );
+      selectionState.setDetailsMode("alert");
+      selectionState.setInstance(instanceName);
+      selectionState.setTarget(targetName);
+      selectionState.setActiveTarget(instanceName, targetName);
+      selectionState.setAlert(uid);
+      await refreshAll();
+      void vscode.window.showInformationMessage(`Saved alert settings: ${alertPath}`);
     },
     savePlacement: async (
       instanceName: string,
@@ -896,11 +949,40 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         deleteFiles: confirmed === "Remove Entry And Files",
       });
       selectionState.setDashboard(undefined);
+      selectionState.setAlert(undefined);
       await refreshAll();
       void vscode.window.showInformationMessage(
         result.removedPaths.length > 0
           ? `Removed ${selectorName} and deleted ${result.removedPaths.length} local file(s).`
           : `Removed ${selectorName} from the manifest.`,
+      );
+    },
+    removeAlertFromProject: async () => {
+      const service = requireService();
+      const instanceName = selectionState.selectedInstanceName ?? selectionState.activeInstanceName;
+      const targetName = selectionState.selectedTargetName ?? selectionState.activeTargetName;
+      const uid = selectionState.selectedAlertUid;
+      if (!instanceName || !targetName || !uid) {
+        throw new Error("Select an alert first.");
+      }
+
+      const confirmed = await vscode.window.showWarningMessage(
+        `Remove alert ${uid} from the project?`,
+        { modal: true },
+        "Remove Alert",
+      );
+      if (confirmed !== "Remove Alert") {
+        return;
+      }
+
+      const result = await service.removeAlertFromProject(instanceName, targetName, uid);
+      selectionState.setAlert(undefined);
+      selectionState.setDetailsMode("instance");
+      await refreshAll();
+      void vscode.window.showInformationMessage(
+        result.removedContactPointKeys.length > 0
+          ? `Removed alert ${uid} and pruned ${result.removedContactPointKeys.length} unused contact point(s).`
+          : `Removed alert ${uid} from the project.`,
       );
     },
     selectActiveInstance: async () => {
@@ -963,6 +1045,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (item instanceof DashboardTreeItem) {
       selectionState.setDetailsMode("dashboard");
       selectionState.setDashboard(item.record.selectorName);
+      selectionState.setAlert(undefined);
       dashboardsProvider.clearTargetRevisionCache();
       dashboardsProvider.refresh();
       instancesProvider.refresh();
@@ -970,6 +1053,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } else if (item instanceof DashboardRevisionTreeItem) {
       selectionState.setDetailsMode("dashboard");
       selectionState.setDashboard(item.record.selectorName);
+      selectionState.setAlert(undefined);
       dashboardsProvider.refresh();
       instancesProvider.refresh();
       void detailsProvider.refresh();
@@ -984,11 +1068,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (item instanceof InstanceTreeItem) {
       selectionState.setDetailsMode("instance");
       selectionState.setInstance(item.instance.name);
+      selectionState.setAlert(undefined);
       void detailsProvider.refresh();
     } else if (item instanceof DeploymentTargetTreeItem) {
       selectionState.setDetailsMode("instance");
       selectionState.setInstance(item.target.instanceName);
       selectionState.setTarget(item.target.name);
+      selectionState.setAlert(undefined);
+      selectionState.setActiveTarget(item.target.instanceName, item.target.name);
+      dashboardsProvider.clearTargetRevisionCache();
+      dashboardsProvider.refresh();
+      void detailsProvider.refresh();
+    } else if (item instanceof InstanceTargetDashboardsGroupTreeItem || item instanceof InstanceTargetAlertsGroupTreeItem) {
+      selectionState.setDetailsMode("instance");
+      selectionState.setInstance(item.target.instanceName);
+      selectionState.setTarget(item.target.name);
+      selectionState.setAlert(undefined);
       selectionState.setActiveTarget(item.target.instanceName, item.target.name);
       dashboardsProvider.clearTargetRevisionCache();
       dashboardsProvider.refresh();
@@ -996,6 +1091,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } else if (item instanceof InstanceTargetDashboardTreeItem) {
       selectionState.setDetailsMode("dashboard");
       selectionState.setDashboard(item.record.selectorName);
+      selectionState.setAlert(undefined);
+      selectionState.setInstance(item.target.instanceName);
+      selectionState.setTarget(item.target.name);
+      selectionState.setActiveTarget(item.target.instanceName, item.target.name);
+      dashboardsProvider.clearTargetRevisionCache();
+      dashboardsProvider.refresh();
+      void detailsProvider.refresh();
+    } else if (item instanceof InstanceTargetAlertTreeItem) {
+      selectionState.setDetailsMode("alert");
+      selectionState.setAlert(item.record.uid);
       selectionState.setInstance(item.target.instanceName);
       selectionState.setTarget(item.target.name);
       selectionState.setActiveTarget(item.target.instanceName, item.target.name);
@@ -1127,6 +1232,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("grafanaDashboards.removeDashboard", (item?: DashboardTreeItem | InstanceTargetDashboardTreeItem) =>
       removeDashboard(item),
     ),
+    vscode.commands.registerCommand("grafanaDashboards.removeAlertFromProject", (item?: InstanceTargetAlertTreeItem) =>
+      removeAlertFromProject(item),
+    ),
     vscode.commands.registerCommand(
       "grafanaDashboards.pullDashboard",
       (item?: DashboardTreeItem | InstanceTreeItem | DeploymentTargetTreeItem | InstanceTargetDashboardTreeItem) =>
@@ -1148,6 +1256,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand("grafanaDashboards.renderAllInstances", () =>
       renderAllInstancesCommand(),
+    ),
+    vscode.commands.registerCommand(
+      "grafanaDashboards.exportAlerts",
+      (item?: InstanceTreeItem | DeploymentTargetTreeItem | InstanceTargetAlertTreeItem) =>
+        exportAlertsCommand(item),
+    ),
+    vscode.commands.registerCommand("grafanaDashboards.copyAlertToTarget", (item?: InstanceTargetAlertTreeItem) =>
+      copyAlertToTargetCommand(item),
+    ),
+    vscode.commands.registerCommand("grafanaDashboards.uploadAlert", (item?: InstanceTargetAlertTreeItem) =>
+      uploadAlertCommand(item),
+    ),
+    vscode.commands.registerCommand("grafanaDashboards.refreshAlertStatus", (item?: InstanceTargetAlertTreeItem) =>
+      refreshAlertStatusCommand(item),
     ),
     vscode.commands.registerCommand("grafanaDashboards.deployAllDashboards", () =>
       deployAllDashboardsCommand(),
@@ -1661,6 +1783,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await actionHandlers.removeDashboard();
   }
 
+  async function removeAlertFromProject(item?: InstanceTargetAlertTreeItem): Promise<void> {
+    const instanceName = item?.target.instanceName ?? selectionState.selectedInstanceName ?? selectionState.activeInstanceName;
+    const targetName = item?.target.name ?? selectionState.selectedTargetName ?? selectionState.activeTargetName;
+    const uid = item?.record.uid ?? selectionState.selectedAlertUid;
+    if (!instanceName || !targetName || !uid) {
+      throw new Error("Select an alert first.");
+    }
+    selectionState.setDetailsMode("alert");
+    selectionState.setInstance(instanceName);
+    selectionState.setTarget(targetName);
+    selectionState.setActiveTarget(instanceName, targetName);
+    selectionState.setAlert(uid);
+    await actionHandlers.removeAlertFromProject();
+  }
+
   async function pullDashboards(
     item?:
       | DashboardTreeItem
@@ -1771,6 +1908,248 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       item instanceof InstanceTreeItem ? item.instance.name : item instanceof DeploymentTargetTreeItem ? item.target.instanceName : undefined;
     const targetName = item instanceof DeploymentTargetTreeItem ? item.target.name : undefined;
     await actionHandlers.openRenderFolder(instanceName, targetName);
+  }
+
+  async function pickTargetForInstance(instanceName: string): Promise<DeploymentTargetRecord> {
+    const repository = requireRepository();
+    const targets = await repository.listDeploymentTargets(instanceName);
+    if (targets.length === 0) {
+      throw new Error(`No deployment targets found for ${instanceName}.`);
+    }
+    if (targets.length === 1) {
+      return targets[0]!;
+    }
+
+    const selection = await vscode.window.showQuickPick(
+      targets.map((target) => ({
+        label: `${target.instanceName}/${target.name}`,
+        target,
+      })),
+      {
+        title: `Choose deployment target for ${instanceName}`,
+      },
+    );
+
+    if (!selection) {
+      throw new Error("No deployment target selected.");
+    }
+
+    return selection.target;
+  }
+
+  async function exportAlertsCommand(
+    item?: InstanceTreeItem | DeploymentTargetTreeItem | InstanceTargetAlertTreeItem,
+    forcedAlertUids?: string[],
+  ): Promise<void> {
+    const repository = requireRepository();
+    const service = requireService();
+    const target =
+      item instanceof InstanceTargetAlertTreeItem
+        ? item.target
+        : item instanceof DeploymentTargetTreeItem
+        ? item.target
+        : item instanceof InstanceTreeItem
+          ? await pickTargetForInstance(item.instance.name)
+          : await pickRequiredDeploymentTarget();
+
+    const candidates = await service.listRemoteAlertRules(target.instanceName);
+    if (candidates.length === 0) {
+      throw new Error(`No alert rules available in ${target.instanceName}.`);
+    }
+
+    const presetUids = new Set(forcedAlertUids?.map((uid) => uid.trim()).filter(Boolean) ?? []);
+    const picks = await vscode.window.showQuickPick(
+      candidates.map((candidate) => ({
+        label: candidate.title,
+        description: candidate.receiver ? `receiver: ${candidate.receiver}` : "policy-managed",
+        detail: `UID: ${candidate.uid}`,
+        picked: presetUids.size > 0 ? presetUids.has(candidate.uid) : false,
+        uid: candidate.uid,
+      })),
+      {
+        canPickMany: true,
+        title: `Pull alerts from ${target.instanceName}/${target.name}`,
+        placeHolder: "Select alert rules to pull",
+      },
+    );
+    if (!picks || picks.length === 0) {
+      return;
+    }
+
+    const summary = await service.exportSelectedAlerts(
+      target.instanceName,
+      target.name,
+      picks.map((pick) => pick.uid),
+    );
+    selectionState.setInstance(target.instanceName);
+    selectionState.setTarget(target.name);
+    selectionState.setActiveTarget(target.instanceName, target.name);
+    selectionState.setAlert(undefined);
+    await refreshAll();
+
+    const outputLabel = path.relative(repository.workspaceRootPath, summary.outputDir) || ".";
+    void vscode.window.showInformationMessage(
+      `Alerts pull complete for ${summary.instanceName}/${summary.targetName}: ${summary.selectedCount} selected, ${summary.updatedCount} updated, ${summary.skippedCount} unchanged (${outputLabel}).`,
+    );
+  }
+
+  async function pickAlertDatasourceForInstance(
+    instanceName: string,
+    title: string,
+  ): Promise<{ uid: string; name?: string }> {
+    const service = requireService();
+    let datasourceOptions: GrafanaDatasourceSummary[] | undefined;
+
+    try {
+      datasourceOptions = await service.listRemoteDatasources(instanceName);
+    } catch {
+      datasourceOptions = undefined;
+    }
+
+    if (datasourceOptions && datasourceOptions.length > 0) {
+      const selection = await vscode.window.showQuickPick(
+        datasourceOptions.map((datasource) => ({
+          label: datasource.name,
+          description: datasource.type ?? "datasource",
+          detail: datasource.uid,
+          datasource,
+        })),
+        {
+          title,
+          placeHolder: `Choose datasource for ${instanceName}`,
+        },
+      );
+      if (!selection) {
+        throw new Error("No datasource selected.");
+      }
+      return {
+        uid: selection.datasource.uid,
+        name: selection.datasource.name,
+      };
+    }
+
+    const datasourceName = await vscode.window.showInputBox({
+      title,
+      prompt: `Datasource name for ${instanceName}`,
+      validateInput: (value) => inputValidator(value, "Datasource name"),
+    });
+    if (!datasourceName) {
+      throw new Error("No datasource name provided.");
+    }
+
+    const datasourceUid = await vscode.window.showInputBox({
+      title,
+      prompt: `Datasource UID for ${instanceName}`,
+      validateInput: (value) => inputValidator(value, "Datasource UID"),
+    });
+    if (!datasourceUid) {
+      throw new Error("No datasource UID provided.");
+    }
+
+    return {
+      uid: datasourceUid.trim(),
+      name: datasourceName.trim(),
+    };
+  }
+
+  async function copyAlertToTargetCommand(item?: InstanceTargetAlertTreeItem): Promise<void> {
+    const repository = requireRepository();
+    const service = requireService();
+    const sourceInstanceName = item?.target.instanceName ?? selectionState.selectedInstanceName ?? selectionState.activeInstanceName;
+    const sourceTargetName = item?.target.name ?? selectionState.selectedTargetName ?? selectionState.activeTargetName;
+    const uid = item?.record.uid ?? selectionState.selectedAlertUid;
+    if (!sourceInstanceName || !sourceTargetName || !uid) {
+      throw new Error("Select an alert in a deployment target first.");
+    }
+
+    const targets = (await repository.listAllDeploymentTargets()).filter(
+      (target) => !(target.instanceName === sourceInstanceName && target.name === sourceTargetName),
+    );
+    if (targets.length === 0) {
+      throw new Error("No destination deployment targets available.");
+    }
+
+    const destination = await vscode.window.showQuickPick(
+      targets.map((target) => ({
+        label: `${target.instanceName}/${target.name}`,
+        target,
+      })),
+      {
+        title: `Copy alert ${uid}`,
+        placeHolder: "Choose destination deployment target",
+      },
+    );
+    if (!destination) {
+      return;
+    }
+
+    const alertDetails = await service.loadAlertDetails(sourceInstanceName, sourceTargetName, uid);
+    const datasourceSelection = alertDetails?.datasourceSelection
+      ? await pickAlertDatasourceForInstance(
+          destination.target.instanceName,
+          `Choose datasource for copied alert ${uid}`,
+        )
+      : undefined;
+
+    const summary = await service.copyAlertToTarget(
+      sourceInstanceName,
+      sourceTargetName,
+      uid,
+      destination.target.instanceName,
+      destination.target.name,
+      datasourceSelection,
+    );
+    selectionState.setDetailsMode("alert");
+    selectionState.setInstance(summary.destinationInstanceName);
+    selectionState.setTarget(summary.destinationTargetName);
+    selectionState.setActiveTarget(summary.destinationInstanceName, summary.destinationTargetName);
+    selectionState.setAlert(summary.destinationUid);
+    await refreshAll();
+    void vscode.window.showInformationMessage(
+      `Copied alert ${summary.sourceUid} to ${summary.destinationInstanceName}/${summary.destinationTargetName} as ${summary.destinationUid}.`,
+    );
+  }
+
+  async function uploadAlertCommand(item?: InstanceTargetAlertTreeItem): Promise<void> {
+    const service = requireService();
+    const instanceName = item?.target.instanceName ?? selectionState.selectedInstanceName ?? selectionState.activeInstanceName;
+    const targetName = item?.target.name ?? selectionState.selectedTargetName ?? selectionState.activeTargetName;
+    const uid = item?.record.uid ?? selectionState.selectedAlertUid;
+    if (!instanceName || !targetName || !uid) {
+      throw new Error("Select an alert in a deployment target first.");
+    }
+
+    const summary = await service.uploadAlert(instanceName, targetName, uid);
+    selectionState.setDetailsMode("alert");
+    selectionState.setAlert(uid);
+    selectionState.setInstance(instanceName);
+    selectionState.setTarget(targetName);
+    selectionState.setActiveTarget(instanceName, targetName);
+    await refreshAll();
+    const updatedContactPoints = summary.contactPointResults.filter((result) => result.status === "updated").length;
+    const skippedContactPoints = summary.contactPointResults.filter((result) => result.status === "skipped").length;
+    void vscode.window.showInformationMessage(
+      `Alert deploy complete for ${uid} on ${instanceName}/${targetName}: rule ${summary.ruleStatus}, contact points ${updatedContactPoints} updated, ${skippedContactPoints} unchanged.`,
+    );
+  }
+
+  async function refreshAlertStatusCommand(item?: InstanceTargetAlertTreeItem): Promise<void> {
+    const service = requireService();
+    const instanceName = item?.target.instanceName ?? selectionState.selectedInstanceName ?? selectionState.activeInstanceName;
+    const targetName = item?.target.name ?? selectionState.selectedTargetName ?? selectionState.activeTargetName;
+    const uid = item?.record.uid ?? selectionState.selectedAlertUid;
+    if (!instanceName || !targetName || !uid) {
+      throw new Error("Select an alert in a deployment target first.");
+    }
+
+    const syncStatus = await service.refreshAlertStatus(instanceName, targetName, uid);
+    selectionState.setDetailsMode("alert");
+    selectionState.setAlert(uid);
+    selectionState.setInstance(instanceName);
+    selectionState.setTarget(targetName);
+    selectionState.setActiveTarget(instanceName, targetName);
+    await refreshAll();
+    void vscode.window.showInformationMessage(`Alert ${uid} status on ${instanceName}/${targetName}: ${syncStatus}.`);
   }
 
   async function pullAllDashboards(item?: InstanceTreeItem | DeploymentTargetTreeItem): Promise<void> {

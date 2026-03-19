@@ -327,6 +327,87 @@ test("removeDashboardFromProject deletes local dashboard and overrides when requ
   });
 });
 
+test("removeAlertFromProject deletes alert files and prunes only unused contact points", async () => {
+  await withTempProject(async (_rootPath, repository) => {
+    await repository.createInstance("prod");
+    await repository.createDeploymentTarget("prod", "blue");
+
+    const manifest = {
+      version: 1 as const,
+      instanceName: "prod",
+      targetName: "blue",
+      generatedAt: "2026-03-19T00:00:00.000Z",
+      rules: {
+        "alert-a": {
+          uid: "alert-a",
+          title: "Alert A",
+          path: "rules/alert-a.json",
+          contactPointKeys: ["uid__cp-shared", "uid__cp-unused"],
+          contactPointStatus: "linked" as const,
+        },
+        "alert-b": {
+          uid: "alert-b",
+          title: "Alert B",
+          path: "rules/alert-b.json",
+          contactPointKeys: ["uid__cp-shared"],
+          contactPointStatus: "linked" as const,
+        },
+      },
+      contactPoints: {
+        "uid__cp-shared": {
+          key: "uid__cp-shared",
+          path: "contact-points/uid__cp-shared.json",
+          name: "shared",
+          uid: "cp-shared",
+          type: "email",
+        },
+        "uid__cp-unused": {
+          key: "uid__cp-unused",
+          path: "contact-points/uid__cp-unused.json",
+          name: "unused",
+          uid: "cp-unused",
+          type: "email",
+        },
+      },
+    };
+
+    await repository.saveAlertsManifest("prod", "blue", manifest);
+    await repository.writeJsonFile(repository.alertRuleFilePath("prod", "blue", "alert-a"), {
+      uid: "alert-a",
+      title: "Alert A",
+    });
+    await repository.writeJsonFile(repository.alertRuleFilePath("prod", "blue", "alert-b"), {
+      uid: "alert-b",
+      title: "Alert B",
+    });
+    await repository.writeJsonFile(repository.alertContactPointFilePath("prod", "blue", "uid__cp-shared"), {
+      uid: "cp-shared",
+      name: "shared",
+      type: "email",
+    });
+    await repository.writeJsonFile(repository.alertContactPointFilePath("prod", "blue", "uid__cp-unused"), {
+      uid: "cp-unused",
+      name: "unused",
+      type: "email",
+    });
+
+    const result = await repository.removeAlertFromProject("prod", "blue", "alert-a");
+    const nextManifest = await repository.loadAlertsManifest("prod", "blue");
+
+    assert.equal(nextManifest.rules["alert-a"], undefined);
+    assert.ok(nextManifest.rules["alert-b"]);
+    assert.ok(nextManifest.contactPoints["uid__cp-shared"]);
+    assert.equal(nextManifest.contactPoints["uid__cp-unused"], undefined);
+    assert.deepEqual(result.removedContactPointKeys, ["uid__cp-unused"]);
+    assert.equal(await repository.readTextFileIfExists(repository.alertRuleFilePath("prod", "blue", "alert-a")), undefined);
+    assert.equal(
+      await repository.readTextFileIfExists(repository.alertContactPointFilePath("prod", "blue", "uid__cp-unused")),
+      undefined,
+    );
+    assert.ok(await repository.readTextFileIfExists(repository.alertContactPointFilePath("prod", "blue", "uid__cp-shared")));
+  });
+});
+
 test("createBackupSnapshot stores grouped backup and lists it", async () => {
   await withTempProject(async (_rootPath, repository) => {
     const entry = {

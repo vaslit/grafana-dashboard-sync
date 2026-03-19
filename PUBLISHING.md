@@ -4,7 +4,7 @@ This repository is prepared for a public release under these defaults:
 
 - GitHub repository: `vaslit/grafana-dashboard-sync`
 - VS Code Marketplace publisher: `vaslit`
-- Extension version: `0.8.17`
+- Extension version: `0.9.2`
 
 ## GitHub Releases Automation
 

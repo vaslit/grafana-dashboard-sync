@@ -4,6 +4,7 @@ import { DashboardService } from "../core/dashboardService";
 import { PROJECT_CONFIG_FILE } from "../core/projectLocator";
 import { ProjectRepository } from "../core/repository";
 import {
+  AlertDetailsModel,
   DashboardDetailsModel,
   DeploymentTargetDetailsModel,
   GlobalDatasourceUsageRow,
@@ -12,6 +13,7 @@ import {
   InstanceDetailsModel,
   LiveTargetVersionStatus,
   OverrideEditorVariableModel,
+  TargetAlertSummaryRow,
   TargetDashboardSummaryRow,
   TargetDatasourceBindingRow,
 } from "../core/types";
@@ -47,6 +49,12 @@ interface DetailsActionHandlers {
   renderTarget(): Promise<void>;
   renderInstance(): Promise<void>;
   renderAllInstances(): Promise<void>;
+  exportAlerts(): Promise<void>;
+  copySelectedAlertToTarget(): Promise<void>;
+  uploadSelectedAlert(): Promise<void>;
+  refreshSelectedAlertStatus(): Promise<void>;
+  saveAlertSettings(instanceName: string, targetName: string, uid: string, values: Record<string, string>): Promise<void>;
+  removeAlertFromProject(): Promise<void>;
   openRenderFolder(): Promise<void>;
   openDashboardJson(): Promise<void>;
   openDatasourceCatalog(): Promise<void>;
@@ -197,20 +205,30 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
 
     const detailsMode =
       this.selectionState.selectedDetailsMode ??
-      (this.selectionState.selectedDashboardSelectorName ? "dashboard" : this.selectionState.selectedInstanceName ? "instance" : undefined);
+      (this.selectionState.selectedDashboardSelectorName
+        ? "dashboard"
+        : this.selectionState.selectedAlertUid
+          ? "alert"
+          : this.selectionState.selectedInstanceName
+            ? "instance"
+            : undefined);
 
     const manifestExists = await repository.manifestExists();
     const dashboardInstanceName =
-      detailsMode === "dashboard"
+      detailsMode === "dashboard" || detailsMode === "alert"
         ? this.selectionState.selectedInstanceName ?? this.selectionState.activeInstanceName
         : this.selectionState.selectedInstanceName;
     const dashboardTargetName =
-      detailsMode === "dashboard"
+      detailsMode === "dashboard" || detailsMode === "alert"
         ? this.selectionState.selectedTargetName ?? this.selectionState.activeTargetName
         : this.selectionState.selectedTargetName;
     const dashboard = detailsMode === "dashboard" && this.selectionState.selectedDashboardSelectorName
       ? await repository.loadDashboardDetails(this.selectionState.selectedDashboardSelectorName)
       : undefined;
+    const alert =
+      detailsMode === "alert" && this.selectionState.selectedAlertUid && dashboardInstanceName && dashboardTargetName
+        ? await service.loadAlertDetails(dashboardInstanceName, dashboardTargetName, this.selectionState.selectedAlertUid).catch(() => undefined)
+        : undefined;
     const instance = dashboardInstanceName
       ? await repository.loadInstanceDetails(dashboardInstanceName)
       : undefined;
@@ -233,6 +251,10 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
     const targetDashboardRows =
       detailsMode === "instance" && instance && this.selectionState.selectedTargetName
         ? await service.buildTargetDashboardSummaryRows(instance.instance.name, this.selectionState.selectedTargetName).catch(() => [])
+        : [];
+    const targetAlertRows =
+      detailsMode === "instance" && instance && this.selectionState.selectedTargetName
+        ? await service.buildTargetAlertSummaryRows(instance.instance.name, this.selectionState.selectedTargetName).catch(() => [])
         : [];
     const datasourceRows =
       dashboard && instance && dashboardTargetName
@@ -344,10 +366,12 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
 <body>
   ${this.renderManifestSection(manifestExists)}
   ${detailsMode === "dashboard" ? this.renderDashboardSection(dashboard) : ""}
+  ${detailsMode === "alert" ? this.renderAlertSection(alert, instance, target, datasourceOptions, datasourceLoadError) : ""}
   ${detailsMode === "dashboard" ? this.renderLiveTargetVersionsSection(dashboard, liveTargetVersions) : ""}
   ${detailsMode === "instance" ? this.renderInstanceSection(instance, target) : ""}
   ${this.renderDatasourceSection(dashboard, instance, target, datasourceRows, datasourceOptions, datasourceLoadError, detailsMode, instanceDatasourceRows)}
   ${detailsMode === "instance" ? this.renderTargetDashboardSection(instance, this.selectionState.selectedTargetName, targetDashboardRows) : ""}
+  ${detailsMode === "instance" ? this.renderTargetAlertSection(instance, this.selectionState.selectedTargetName, targetAlertRows) : ""}
   ${detailsMode === "dashboard" ? this.renderPlacementSection(dashboard, instance, target, placement, placementView) : ""}
   ${detailsMode === "dashboard" ? this.renderOverrideSection(dashboard, instance, target, overrideVariables) : ""}
   <script nonce="${scriptNonce}">
@@ -441,6 +465,14 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
       dashboardDatasourceForm.addEventListener("submit", (event) => {
         event.preventDefault();
         vscode.postMessage({ type: "saveDashboardDatasourceMappings", payload: valuesFromForm(dashboardDatasourceForm) });
+      });
+    }
+
+    const alertForm = document.getElementById("alert-form");
+    if (alertForm) {
+      alertForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        vscode.postMessage({ type: "saveAlertSettings", payload: valuesFromForm(alertForm) });
       });
     }
 
@@ -670,6 +702,130 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
     </section>`;
   }
 
+  private renderAlertSection(
+    alert: AlertDetailsModel | undefined,
+    instance?: InstanceDetailsModel,
+    target?: DeploymentTargetDetailsModel,
+    datasourceOptions: GrafanaDatasourceSummary[] = [],
+    datasourceLoadError?: string,
+  ): string {
+    if (!alert || !instance || !target) {
+      return `<section data-collapsible-section="alert">
+        <h2>Alert</h2>
+        <div class="hint">Select an alert from Instances -> Target -> Alerts.</div>
+      </section>`;
+    }
+
+    const contactPoints =
+      alert.contactPoints.length === 0
+        ? `<div class="hint">No linked contact points.</div>`
+        : alert.contactPoints
+            .map(
+              (contactPoint) =>
+                `<div class="grid" style="padding: 8px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 6px;">
+                  <div><strong>${escapeHtml(contactPoint.name)}</strong></div>
+                  <div class="small">Key: ${escapeHtml(contactPoint.key)}</div>
+                  <div class="small">UID: ${escapeHtml(contactPoint.uid ?? "(none)")}</div>
+                  <div class="small">Type: ${escapeHtml(contactPoint.type ?? "(unknown)")}</div>
+                  <div class="small">Local file: ${escapeHtml(contactPoint.exists ? "present" : "missing")}</div>
+                </div>`,
+            )
+            .join("");
+
+    const targetUid = alert.datasourceSelection?.targetUid;
+    const targetName =
+      alert.datasourceSelection?.targetName ??
+      datasourceOptions.find((option) => option.uid === targetUid)?.name ??
+      "";
+    const targetUidInputId = "alert-target-uid";
+    const targetNameInputId = "alert-target-name";
+    const helperSelectId = "alert-target-helper";
+    const datasourceSelectOptions = [
+      `<option value="">Select datasource to autofill</option>`,
+      ...datasourceOptions.map((option) => {
+        const selected = option.uid === targetUid ? ' selected="selected"' : "";
+        return `<option value="${escapeHtml(option.uid)}" data-datasource-name="${escapeHtml(option.name)}"${selected}>${escapeHtml(optionLabel(option))}</option>`;
+      }),
+      ...(targetUid && !datasourceOptions.some((option) => option.uid === targetUid)
+        ? [
+            `<option value="${escapeHtml(targetUid)}" data-datasource-name="${escapeHtml(targetName)}" selected="selected">${escapeHtml(
+              targetName ? `${targetName} (${targetUid})` : targetUid,
+            )}</option>`,
+          ]
+        : []),
+    ].join("");
+    const datasourceEditor = alert.datasourceSelection
+      ? `<label>
+            Resolved Instance Datasource
+            <select
+              id="${helperSelectId}"
+              data-target-uid-input="${targetUidInputId}"
+              data-target-name-input="${targetNameInputId}"
+            >
+              ${datasourceSelectOptions}
+            </select>
+          </label>
+          <div class="small">Alert refs: ${escapeHtml(alert.datasourceSelection.refIds.join(", "))}</div>
+          <div class="small">Current external datasource UIDs: ${escapeHtml(alert.datasourceSelection.sourceUids.join(", "))}</div>
+          <div class="small">Saving rewrites all non-expression datasource refs to one datasource.</div>
+          <label>
+            Target Datasource Name
+            <input
+              id="${targetNameInputId}"
+              type="text"
+              name="alert_target_name"
+              value="${escapeHtml(targetName)}"
+              placeholder="Prometheus Prod"
+            />
+          </label>
+          <label>
+            Target Datasource UID
+            <input
+              id="${targetUidInputId}"
+              type="text"
+              name="alert_target_uid"
+              value="${escapeHtml(targetUid ?? "")}"
+              placeholder="prometheus-prod-uid"
+            />
+          </label>`
+      : `<div class="hint">No external datasources found in this alert.</div>`;
+    const loadError =
+      datasourceLoadError !== undefined
+        ? `<div class="hint">Could not load datasources from Grafana for <strong>${escapeHtml(instance.instance.name)}</strong>: ${escapeHtml(datasourceLoadError)}</div>`
+        : "";
+
+    return `<section data-collapsible-section="alert">
+      <h2>Alert</h2>
+      <div class="hint">Selected alert for <strong>${escapeHtml(instance.instance.name)}/${escapeHtml(target.target.name)}</strong>.</div>
+      <div class="small">UID: ${escapeHtml(alert.rule.uid)}</div>
+      <div class="small">Title: ${escapeHtml(alert.rule.title)}</div>
+      <div class="small">Contact point status: ${escapeHtml(alert.rule.contactPointStatus)}</div>
+      <div class="small">Sync status: ${escapeHtml(alert.syncStatus)}${alert.syncDetail ? ` (${escapeHtml(alert.syncDetail)})` : ""}</div>
+      <div class="small">Paused locally: ${escapeHtml(alert.isPaused ? "yes" : "no")}</div>
+      <div class="grid" style="margin-top: 8px;">
+        ${contactPoints}
+      </div>
+      ${loadError}
+      <form id="alert-form" class="grid" style="margin-top: 8px;">
+        ${datasourceEditor}
+        <label>
+          <input type="checkbox" name="isPaused" ${alert.isPaused ? 'checked="checked"' : ""} />
+          Pause alert locally
+        </label>
+        <div class="actions">
+          <button type="submit">Save Alert</button>
+        </div>
+      </form>
+      <div class="actions">
+        <button data-command="exportAlerts">Pull Alerts</button>
+        <button type="button" class="secondary" data-command="copySelectedAlertToTarget">Copy Alert To Target</button>
+        <button type="button" class="secondary" data-command="uploadSelectedAlert">Deploy Alert</button>
+        <button type="button" class="secondary" data-command="refreshSelectedAlertStatus">Refresh Alert Status</button>
+        <button type="button" class="secondary" data-command="removeAlertFromProject">Remove Alert From Project</button>
+      </div>
+    </section>`;
+  }
+
   private renderLiveTargetVersionsSection(
     dashboard: DashboardDetailsModel | undefined,
     statuses: LiveTargetVersionStatus[],
@@ -873,7 +1029,7 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
     rows: DatasourceMappingRow[],
     datasourceOptions: GrafanaDatasourceSummary[],
     datasourceLoadError?: string,
-    detailsMode?: "dashboard" | "instance",
+    detailsMode?: "dashboard" | "instance" | "alert",
     instanceRows: InstanceDatasourceSummaryRow[] = [],
   ): string {
     if (!instance) {
@@ -978,6 +1134,38 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
     return `<section data-collapsible-section="target-dashboards">
       <h2>Target Dashboards</h2>
       <div class="hint">Managed dashboards for <strong>${escapeHtml(instance.instance.name)}/${escapeHtml(targetName)}</strong>.</div>
+      <div class="grid" style="margin-top: 8px;">
+        ${content}
+      </div>
+    </section>`;
+  }
+
+  private renderTargetAlertSection(
+    instance: InstanceDetailsModel | undefined,
+    targetName: string | undefined,
+    rows: TargetAlertSummaryRow[],
+  ): string {
+    if (!instance || !targetName) {
+      return "";
+    }
+
+    const content =
+      rows.length === 0
+        ? `<div class="hint">No alerts pulled for this target.</div>`
+        : rows
+            .map((row) => {
+              return `<div class="grid" style="padding: 8px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 6px;">
+                <div><strong>${escapeHtml(row.title)}</strong></div>
+                <div class="small">UID: ${escapeHtml(row.uid)}</div>
+                <div class="small">Contact points: ${escapeHtml(row.contactPointStatus)}</div>
+                <div class="small">Sync: ${escapeHtml(row.syncStatus)}${row.syncDetail ? ` (${escapeHtml(row.syncDetail)})` : ""}</div>
+              </div>`;
+            })
+            .join("");
+
+    return `<section data-collapsible-section="target-alerts">
+      <h2>Target Alerts</h2>
+      <div class="hint">Pulled alerts for <strong>${escapeHtml(instance.instance.name)}/${escapeHtml(targetName)}</strong>.</div>
       <div class="grid" style="margin-top: 8px;">
         ${content}
       </div>
@@ -1274,6 +1462,7 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
 
   private async handleMessage(message: { type: string; payload?: Record<string, string> | string }): Promise<void> {
     const dashboardSelector = this.selectionState.selectedDashboardSelectorName;
+    const alertUid = this.selectionState.selectedAlertUid;
     const instanceName = this.selectionState.selectedInstanceName ?? this.selectionState.activeInstanceName;
     const targetName = this.selectionState.selectedTargetName ?? this.selectionState.activeTargetName;
 
@@ -1322,6 +1511,12 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
           dashboardSelector,
           message.payload as Record<string, string>,
         );
+        return;
+      case "saveAlertSettings":
+        if (!instanceName || !targetName || !alertUid) {
+          throw new Error("Select an alert and deployment target to save alert settings.");
+        }
+        await this.actions.saveAlertSettings(instanceName, targetName, alertUid, message.payload as Record<string, string>);
         return;
       case "removeInstance":
         await this.actions.removeInstance();
@@ -1431,6 +1626,21 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
         return;
       case "renderTarget":
         await this.actions.renderTarget();
+        return;
+      case "exportAlerts":
+        await this.actions.exportAlerts();
+        return;
+      case "copySelectedAlertToTarget":
+        await this.actions.copySelectedAlertToTarget();
+        return;
+      case "uploadSelectedAlert":
+        await this.actions.uploadSelectedAlert();
+        return;
+      case "refreshSelectedAlertStatus":
+        await this.actions.refreshSelectedAlertStatus();
+        return;
+      case "removeAlertFromProject":
+        await this.actions.removeAlertFromProject();
         return;
       case "openRenderFolder":
         await this.actions.openRenderFolder();
