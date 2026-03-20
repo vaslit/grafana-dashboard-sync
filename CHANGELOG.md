@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.9.6 - 2026-03-20
+
+- Bumped extension version for the workspace-layout update release.
+
 ## 0.9.5 - 2026-03-20
 
 - Added `layout.alertsDir` to `.grafana-dashboard-workspace.json` and resolved alerts storage through configured project layout.

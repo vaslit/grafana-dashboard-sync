@@ -1,26 +1,27 @@
 # Local Build Notes
 
 This project can be built and packaged even if the shell does not have `node` or `npm`,
-as long as VS Code is installed and `code` is available.
+as long as VS Code is installed and its bundled Electron binary is available.
 
 ## Use VS Code bundled Node
 
-VS Code ships its own Node runtime. Run it like this:
+VS Code ships its own Node runtime inside the Electron binary. Use the actual binary, not
+the `code` shell wrapper:
 
 ```bash
-ELECTRON_RUN_AS_NODE=1 code -e "console.log(process.version)"
+ELECTRON_RUN_AS_NODE=1 /usr/share/code/code -e "console.log(process.version)"
 ```
 
 In this repository, the working build flow is:
 
 ```bash
-ELECTRON_RUN_AS_NODE=1 code ./node_modules/typescript/bin/tsc -p ./
-ELECTRON_RUN_AS_NODE=1 code --test ./out/test/*.test.js
-ELECTRON_RUN_AS_NODE=1 code ./node_modules/@vscode/vsce/vsce package --no-dependencies -o grafana-dashboard-sync-<version>-local.vsix
+ELECTRON_RUN_AS_NODE=1 /usr/share/code/code ./node_modules/typescript/bin/tsc -p ./
+ELECTRON_RUN_AS_NODE=1 /usr/share/code/code --test ./out/test/*.test.js
+ELECTRON_RUN_AS_NODE=1 /usr/share/code/code ./node_modules/@vscode/vsce/vsce package --no-dependencies -o grafana-dashboard-sync-<version>-local.vsix
 code --install-extension ./grafana-dashboard-sync-<version>-local.vsix --force
 ```
 
-If `code` is not on `PATH`, replace it with the actual VS Code executable path for your OS.
+If `/usr/share/code/code` is different on your machine, replace it with the actual VS Code binary path for your OS.
 
 ## Why `--no-dependencies`
 
