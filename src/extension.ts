@@ -422,7 +422,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
     },
     exportAlerts: async () => {
-      await exportAlertsCommand(undefined, selectionState.selectedAlertUid ? [selectionState.selectedAlertUid] : undefined);
+      await exportAlertsCommand();
     },
     copySelectedAlertToTarget: async () => {
       await copyAlertToTargetCommand();
@@ -1319,10 +1319,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("grafanaDashboards.renderAllInstances", () =>
       renderAllInstancesCommand(),
     ),
+    vscode.commands.registerCommand("grafanaDashboards.addAlerts", (item?: DeploymentTargetTreeItem) =>
+      addAlertsCommand(item),
+    ),
     vscode.commands.registerCommand(
       "grafanaDashboards.exportAlerts",
       (item?: InstanceTreeItem | DeploymentTargetTreeItem | InstanceTargetAlertTreeItem) =>
         exportAlertsCommand(item),
+    ),
+    vscode.commands.registerCommand("grafanaDashboards.pullAllAlerts", () =>
+      pullAllAlertsCommand(),
+    ),
+    vscode.commands.registerCommand("grafanaDashboards.deployAlerts", (item?: InstanceTreeItem | DeploymentTargetTreeItem) =>
+      deployAlertsCommand(item),
+    ),
+    vscode.commands.registerCommand("grafanaDashboards.deployAllAlerts", () =>
+      deployAllAlertsCommand(),
     ),
     vscode.commands.registerCommand("grafanaDashboards.copyAlertToTarget", (item?: InstanceTargetAlertTreeItem) =>
       copyAlertToTargetCommand(item),
@@ -2135,46 +2147,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return selection.target;
   }
 
-  async function exportAlertsCommand(
-    item?: InstanceTreeItem | DeploymentTargetTreeItem | InstanceTargetAlertTreeItem,
-    forcedAlertUids?: string[],
-  ): Promise<void> {
+  async function addAlertsCommand(item?: DeploymentTargetTreeItem): Promise<void> {
     const repository = requireRepository();
     const service = requireService();
-    const target =
-      item instanceof InstanceTargetAlertTreeItem
-        ? item.target
-        : item instanceof DeploymentTargetTreeItem
-        ? item.target
-        : item instanceof InstanceTreeItem
-          ? await pickTargetForInstance(item.instance.name)
-          : await pickRequiredDeploymentTarget();
-
+    const target = item?.target ?? (await pickRequiredDeploymentTarget());
     const candidates = await service.listRemoteAlertRules(target.instanceName);
     if (candidates.length === 0) {
       throw new Error(`No alert rules available in ${target.instanceName}.`);
     }
 
-    const presetUids = new Set(forcedAlertUids?.map((uid) => uid.trim()).filter(Boolean) ?? []);
+    const trackedUids = new Set(await repository.listTrackedAlertUids(target.instanceName, target.name));
+    const availableCandidates = candidates.filter((candidate) => !trackedUids.has(candidate.uid));
+    if (availableCandidates.length === 0) {
+      void vscode.window.showInformationMessage(
+        `All available alerts in ${target.instanceName}/${target.name} are already tracked locally.`,
+      );
+      return;
+    }
+
     const picks = await vscode.window.showQuickPick(
-      candidates.map((candidate) => ({
+      availableCandidates.map((candidate) => ({
         label: candidate.title,
         description: candidate.receiver ? `receiver: ${candidate.receiver}` : "policy-managed",
         detail: `UID: ${candidate.uid}`,
-        picked: presetUids.size > 0 ? presetUids.has(candidate.uid) : false,
         uid: candidate.uid,
       })),
       {
         canPickMany: true,
-        title: `Pull alerts from ${target.instanceName}/${target.name}`,
-        placeHolder: "Select alert rules to pull",
+        title: `Add alerts to ${target.instanceName}/${target.name}`,
+        placeHolder: "Select alert rules to track locally",
       },
     );
     if (!picks || picks.length === 0) {
       return;
     }
 
-    const summary = await service.exportSelectedAlerts(
+    const summary = await service.addAlerts(
       target.instanceName,
       target.name,
       picks.map((pick) => pick.uid),
@@ -2187,7 +2195,99 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const outputLabel = path.relative(repository.workspaceRootPath, summary.outputDir) || ".";
     void vscode.window.showInformationMessage(
-      `Alerts pull complete for ${summary.instanceName}/${summary.targetName}: ${summary.selectedCount} selected, ${summary.updatedCount} updated, ${summary.skippedCount} unchanged (${outputLabel}).`,
+      `Alerts added for ${summary.instanceName}/${summary.targetName}: ${summary.selectedCount} tracked, ${summary.updatedCount} updated, ${summary.skippedCount} unchanged (${outputLabel}).`,
+    );
+  }
+
+  async function exportAlertsCommand(
+    item?: InstanceTreeItem | DeploymentTargetTreeItem | InstanceTargetAlertTreeItem,
+  ): Promise<void> {
+    const repository = requireRepository();
+    const service = requireService();
+    const targets =
+      item instanceof InstanceTargetAlertTreeItem
+        ? [item.target]
+        : item instanceof DeploymentTargetTreeItem
+        ? [item.target]
+        : item instanceof InstanceTreeItem
+          ? await repository.listDeploymentTargets(item.instance.name)
+          : [await pickRequiredDeploymentTarget()];
+    if (targets.length === 0) {
+      throw new Error("No deployment targets available.");
+    }
+
+    const summary = await service.pullTrackedAlertsForTargets(targets);
+    if (targets.length === 1) {
+      const target = targets[0]!;
+      selectionState.setInstance(target.instanceName);
+      selectionState.setTarget(target.name);
+      selectionState.setActiveTarget(target.instanceName, target.name);
+    }
+    selectionState.setAlert(undefined);
+    await refreshAll();
+    void vscode.window.showInformationMessage(
+      `Alerts pull complete: ${summary.alertCount} tracked alert(s), ${summary.updatedCount} updated, ${summary.skippedCount} unchanged, ${summary.failedCount} failed across ${summary.targetCount} target(s).`,
+    );
+  }
+
+  async function deployAlertsCommand(
+    item?: InstanceTreeItem | DeploymentTargetTreeItem,
+  ): Promise<void> {
+    const repository = requireRepository();
+    const service = requireService();
+    const targets =
+      item instanceof DeploymentTargetTreeItem
+        ? [item.target]
+        : item instanceof InstanceTreeItem
+          ? await repository.listDeploymentTargets(item.instance.name)
+          : [await pickRequiredDeploymentTarget()];
+    if (targets.length === 0) {
+      throw new Error("No deployment targets available.");
+    }
+
+    const summary = await service.deployTrackedAlertsForTargets(targets);
+    if (targets.length === 1) {
+      const target = targets[0]!;
+      selectionState.setInstance(target.instanceName);
+      selectionState.setTarget(target.name);
+      selectionState.setActiveTarget(target.instanceName, target.name);
+    }
+    selectionState.setAlert(undefined);
+    await refreshAll();
+    void vscode.window.showInformationMessage(
+      `Alerts deploy complete: ${summary.alertCount} tracked alert(s), ${summary.updatedCount} updated, ${summary.skippedCount} unchanged, ${summary.failedCount} failed across ${summary.targetCount} target(s).`,
+    );
+  }
+
+  async function pullAllAlertsCommand(): Promise<void> {
+    const repository = requireRepository();
+    const service = requireService();
+    const targets = await repository.listAllDeploymentTargets();
+    if (targets.length === 0) {
+      throw new Error("No deployment targets available.");
+    }
+
+    const summary = await service.pullTrackedAlertsForTargets(targets);
+    selectionState.setAlert(undefined);
+    await refreshAll();
+    void vscode.window.showInformationMessage(
+      `Alerts pull complete for all targets: ${summary.alertCount} tracked alert(s), ${summary.updatedCount} updated, ${summary.skippedCount} unchanged, ${summary.failedCount} failed across ${summary.targetCount} target(s).`,
+    );
+  }
+
+  async function deployAllAlertsCommand(): Promise<void> {
+    const repository = requireRepository();
+    const service = requireService();
+    const targets = await repository.listAllDeploymentTargets();
+    if (targets.length === 0) {
+      throw new Error("No deployment targets available.");
+    }
+
+    const summary = await service.deployTrackedAlertsForTargets(targets);
+    selectionState.setAlert(undefined);
+    await refreshAll();
+    void vscode.window.showInformationMessage(
+      `Alerts deploy complete for all targets: ${summary.alertCount} tracked alert(s), ${summary.updatedCount} updated, ${summary.skippedCount} unchanged, ${summary.failedCount} failed across ${summary.targetCount} target(s).`,
     );
   }
 

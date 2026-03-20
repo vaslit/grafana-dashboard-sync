@@ -2029,6 +2029,15 @@ export class ProjectRepository {
     return records.sort((left, right) => left.title.localeCompare(right.title) || left.uid.localeCompare(right.uid));
   }
 
+  async listTrackedAlertUids(instanceName: string, targetName: string): Promise<string[]> {
+    const manifest = await this.readAlertsManifest(instanceName, targetName);
+    if (!manifest) {
+      return [];
+    }
+
+    return Object.keys(manifest.rules).sort((left, right) => left.localeCompare(right));
+  }
+
   async alertRecordByUid(
     instanceName: string,
     targetName: string,

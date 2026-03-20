@@ -657,6 +657,88 @@ test("exportAlerts does not write partial files when one export endpoint fails",
   });
 });
 
+test("exportAlerts pulls only tracked alerts and ignores untracked remote rules", async () => {
+  await withTempProject(async (repository, entry) => {
+    await repository.createInstance("prod");
+    await repository.createDeploymentTarget("prod", "blue");
+    await repository.writeJsonFile(repository.dashboardPath(entry), {
+      title: "Status",
+      uid: entry.uid,
+    });
+    await repository.saveAlertsManifest("prod", "blue", {
+      version: 1,
+      instanceName: "prod",
+      targetName: "blue",
+      generatedAt: "2026-03-19T00:00:00.000Z",
+      rules: {
+        "alert-cpu-high": {
+          uid: "alert-cpu-high",
+          title: "CPU High",
+          path: "rules/alert-cpu-high.json",
+          contactPointKeys: [],
+          contactPointStatus: "policy-managed",
+        },
+      },
+      contactPoints: {},
+    });
+
+    const service = new DashboardService(
+      repository,
+      logger(),
+      async () =>
+        new MockGrafanaClient(
+          {
+            dashboard: {
+              title: "unused",
+              uid: entry.uid,
+            },
+            meta: {},
+          },
+          [],
+          () => {},
+          [],
+          () => {},
+          {
+            rules: [
+              {
+                uid: "alert-cpu-high",
+                title: "CPU High",
+                notification_settings: {
+                  receiver: "oncall",
+                },
+              },
+              {
+                uid: "alert-memory-high",
+                title: "Memory High",
+                notification_settings: {
+                  receiver: "oncall",
+                },
+              },
+            ],
+            contactPoints: [
+              {
+                uid: "cp-oncall",
+                name: "oncall",
+                type: "email",
+                settings: {
+                  addresses: "ops@example.com",
+                },
+              },
+            ],
+          },
+        ),
+    );
+
+    const summary = await service.exportAlerts("prod", "blue");
+
+    assert.equal(summary.alertCount, 1);
+    assert.equal(summary.failedCount, 0);
+    const manifest = await repository.readAlertsManifest("prod", "blue");
+    assert.ok(manifest?.rules["alert-cpu-high"]);
+    assert.equal(manifest?.rules["alert-memory-high"], undefined);
+  });
+});
+
 test("saveAlertSettings updates isPaused and rewrites all non-expression datasource refs", async () => {
   await withTempProject(async (repository, entry) => {
     await repository.createInstance("prod");
@@ -955,6 +1037,102 @@ test("uploadAlert upserts contact points before creating the alert rule", async 
     assert.ok(operationLog.indexOf("updateAlertRuleGroup:folder-1/integration") >= 0);
     assert.ok(operationLog.indexOf("createContactPoint:cp-a") < operationLog.indexOf("createAlertRule:alert-a"));
     assert.ok(operationLog.indexOf("createAlertRule:alert-a") < operationLog.indexOf("updateAlertRuleGroup:folder-1/integration"));
+  });
+});
+
+test("deployTrackedAlertsForTargets continues when one alert fails", async () => {
+  await withTempProject(async (repository, entry) => {
+    await repository.createInstance("prod");
+    await repository.createDeploymentTarget("prod", "blue");
+    await repository.createDeploymentTarget("prod", "green");
+    await repository.writeJsonFile(repository.dashboardPath(entry), {
+      title: "Status",
+      uid: entry.uid,
+    });
+    await repository.saveAlertsManifest("prod", "blue", {
+      version: 1,
+      instanceName: "prod",
+      targetName: "blue",
+      generatedAt: "2026-03-19T00:00:00.000Z",
+      rules: {
+        "alert-a": {
+          uid: "alert-a",
+          title: "Alert A",
+          path: "rules/alert-a.json",
+          contactPointKeys: [],
+          contactPointStatus: "policy-managed",
+        },
+      },
+      contactPoints: {},
+    });
+    await repository.saveAlertsManifest("prod", "green", {
+      version: 1,
+      instanceName: "prod",
+      targetName: "green",
+      generatedAt: "2026-03-19T00:00:00.000Z",
+      rules: {
+        "alert-b": {
+          uid: "alert-b",
+          title: "Alert B",
+          path: "rules/alert-b.json",
+          contactPointKeys: [],
+          contactPointStatus: "policy-managed",
+        },
+      },
+      contactPoints: {},
+    });
+    await repository.writeJsonFile(repository.alertRuleFilePath("prod", "blue", "alert-a"), {
+      uid: "alert-a",
+      title: "Alert A",
+      folderUID: "folder-1",
+      ruleGroup: "integration",
+      data: [],
+    });
+
+    const operationLog: string[] = [];
+    const service = new DashboardService(
+      repository,
+      logger(),
+      async () =>
+        new MockGrafanaClient(
+          {
+            dashboard: {
+              title: "unused",
+              uid: entry.uid,
+            },
+            meta: {},
+          },
+          [],
+          () => {},
+          [],
+          () => {},
+          {
+            rules: [],
+            contactPoints: [],
+            operationLog,
+          },
+        ),
+    );
+
+    const summary = await service.deployTrackedAlertsForTargets([
+      {
+        instanceName: "prod",
+        name: "blue",
+        dirPath: "ignored",
+      },
+      {
+        instanceName: "prod",
+        name: "green",
+        dirPath: "ignored",
+      },
+    ]);
+
+    assert.equal(summary.targetCount, 2);
+    assert.equal(summary.alertCount, 2);
+    assert.equal(summary.updatedCount, 1);
+    assert.equal(summary.failedCount, 1);
+    assert.ok(operationLog.indexOf("createAlertRule:alert-a") >= 0);
+    assert.ok(summary.targetResults.some((result) => result.targetName === "green" && result.failedCount === 1));
   });
 });
 

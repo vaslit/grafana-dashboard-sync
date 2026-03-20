@@ -291,9 +291,9 @@ export class InstanceTreeProvider implements vscode.TreeDataProvider<vscode.Tree
     const records = await repository.listTargetAlertRecords(target.instanceName, target.name);
     if (records.length === 0) {
       return [
-        new InstancePlaceholderItem("No alerts pulled yet. Use Pull Alerts.", {
-          command: "grafanaDashboards.exportAlerts",
-          title: "Pull Alerts",
+        new InstancePlaceholderItem("No alerts added yet. Use Add Alerts...", {
+          command: "grafanaDashboards.addAlerts",
+          title: "Add Alerts",
           arguments: [new DeploymentTargetTreeItem(target, 0, 0)],
         }),
       ];

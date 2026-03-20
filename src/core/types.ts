@@ -283,6 +283,19 @@ export interface ExportSelectedAlertsSummary {
   fileResults: AlertStorageFileResult[];
 }
 
+export interface PullTrackedAlertsSummary {
+  instanceName: string;
+  targetName: string;
+  outputDir: string;
+  manifestPath: string;
+  alertCount: number;
+  updatedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  failedUids: string[];
+  fileResults: AlertStorageFileResult[];
+}
+
 export interface AlertUploadContactPointResult {
   key: string;
   status: "updated" | "skipped";
@@ -295,6 +308,35 @@ export interface UploadAlertSummary {
   ruleStatus: "updated" | "skipped";
   contactPointResults: AlertUploadContactPointResult[];
   syncStatus: AlertSyncStatus;
+}
+
+export interface DeployTrackedAlertsSummary {
+  instanceName: string;
+  targetName: string;
+  alertCount: number;
+  updatedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  failedUids: string[];
+  results: UploadAlertSummary[];
+}
+
+export interface MultiTargetAlertOperationTargetResult {
+  instanceName: string;
+  targetName: string;
+  alertCount: number;
+  updatedCount: number;
+  skippedCount: number;
+  failedCount: number;
+}
+
+export interface MultiTargetAlertOperationSummary {
+  targetCount: number;
+  alertCount: number;
+  updatedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  targetResults: MultiTargetAlertOperationTargetResult[];
 }
 
 export interface CopyAlertSummary {

@@ -106,11 +106,15 @@ Each render produces dashboard JSON files plus `.render-manifest.json` with reso
 
 ### Alerts Pull / Deploy
 
+- `Grafana Sync: Add Alerts...`
 - `Grafana Sync: Pull Alerts`
+- `Grafana Sync: Pull All Alerts`
+- `Grafana Sync: Deploy Alerts`
+- `Grafana Sync: Deploy All Alerts`
 - `Grafana Sync: Deploy Alert`
 
-`Pull Alerts` loads alert rules from Grafana for the selected deployment target and opens a multi-select picker.
-Selected rules are stored with linked contact points (direct receiver only).
+`Add Alerts...` loads alert rules from Grafana for one selected deployment target and lets you choose which rules to start tracking locally.
+After that, `Pull Alerts` refreshes only already tracked alerts for a target or instance, and `Pull All Alerts` refreshes tracked alerts across all targets.
 
 Stored layout:
 
@@ -122,6 +126,7 @@ alerts/<instance>/<target>/
 ```
 
 Files are saved as pretty JSON with stable key ordering for readable diffs.
+`Deploy Alerts` deploys all tracked local alerts for the selected target or instance, and `Deploy All Alerts` deploys tracked alerts across all targets.
 `Deploy Alert` deploys one selected local alert (and its linked contact points) back to Grafana.
 If local and remote payloads are equal, upload is skipped.
 

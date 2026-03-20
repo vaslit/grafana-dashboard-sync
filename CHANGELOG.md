@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.9.10 - 2026-03-20
+
+- Switched alerts to a tracked model with `Add Alerts...`, tracked-only pull, and bulk pull/deploy commands for target, instance, and all instances scopes.
+
 ## 0.9.9 - 2026-03-20
 
 - Moved mass dashboard pull in the Instances view onto the dedicated Dev Target item and removed misleading pull actions from regular instance and target entries.

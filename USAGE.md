@@ -92,7 +92,7 @@ project-root/
    - folder placement
    - target-specific dashboard UID
 4. Выполнить `render` для нужных targets.
-5. При необходимости выполнить `Grafana Sync: Pull Alerts` для нужного target.
+5. При необходимости добавить alerts через `Grafana Sync: Add Alerts...`, затем обновить их через `Grafana Sync: Pull Alerts`.
 6. Проверить render output и pulled alerts.
 7. Закоммитить изменения в git.
 
@@ -451,16 +451,20 @@ Render использует:
 - `Dashboards -> Render Dashboard` работает от локальной working copy
 - `Instances -> Render Target / Render Instance / Render All Instances` работает от revision, закрепленных за target-ами
 
-## Alerts Pull
+## Alerts Add / Pull
 
 Команда:
 
+- `Grafana Sync: Add Alerts...`
 - `Grafana Sync: Pull Alerts`
+- `Grafana Sync: Pull All Alerts`
 
 Что делает:
 
-- загружает список rule из Grafana и дает выбрать конкретные alerts
+- `Add Alerts...` загружает список rule из Grafana и дает выбрать конкретные alerts
 - для выбранных alerts сохраняет сами rules и связанные `contact points` (по прямому receiver)
+- `Pull Alerts` после этого обновляет только уже добавленные локально alerts
+- `Pull All Alerts` обновляет tracked alerts по всем targets
 - сохраняет pretty JSON (читаемый diff)
 
 Куда сохраняет:
@@ -474,18 +478,24 @@ alerts/<instance>/<target>/
 
 Важно:
 
+- `Add Alerts...` работает только для одного target
 - `Pull Alerts` не ограничен `dev target` (в отличие от `pull` dashboards)
+- `Pull Alerts` в tracked-модели не выбирает новые alerts, а обновляет уже добавленные локально
 - связь alert -> contact point в v1 только прямая (без полного resolve по policies)
 - для alert без прямого receiver в details будет статус `policy-managed`
 
-## Deploy Alert
+## Deploy Alert / Deploy Alerts
 
 Команда:
 
+- `Grafana Sync: Deploy Alerts`
+- `Grafana Sync: Deploy All Alerts`
 - `Grafana Sync: Deploy Alert`
 
 Что делает:
 
+- `Deploy Alerts` деплоит все tracked local alerts для target или instance
+- `Deploy All Alerts` деплоит tracked alerts по всем targets
 - загружает выбранный локальный alert обратно в Grafana
 - перед upload сравнивает локальную и текущую remote-версию
 - если отличий нет, upload пропускается

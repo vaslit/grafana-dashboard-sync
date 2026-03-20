@@ -36,8 +36,11 @@ import {
   AlertUploadContactPointResult,
   AlertsManifest,
   CopyAlertSummary,
+  DeployTrackedAlertsSummary,
   ExportSelectedAlertsSummary,
   EffectiveConnectionConfig,
+  MultiTargetAlertOperationSummary,
+  MultiTargetAlertOperationTargetResult,
   BackupDashboardRecord,
   BackupRecord,
   BackupRestoreSelection,
@@ -68,6 +71,7 @@ import {
   OverrideGenerationResult,
   PullDashboardResult,
   PullFileResult,
+  PullTrackedAlertsSummary,
   PullSummary,
   RestoreSummary,
   TargetDashboardSummaryRow,
@@ -611,18 +615,58 @@ export class DashboardService {
     return summaries.sort((left, right) => left.title.localeCompare(right.title) || left.uid.localeCompare(right.uid));
   }
 
-  async exportAlerts(
-    instanceName?: string,
-    targetName = DEFAULT_DEPLOYMENT_TARGET,
-    selectedUids?: string[],
-  ): Promise<ExportSelectedAlertsSummary> {
-    if (!instanceName) {
-      throw new Error("Choose a concrete Grafana instance and deployment target for alerts pull.");
-    }
+  private emptyPullTrackedAlertsSummary(
+    instanceName: string,
+    targetName: string,
+  ): PullTrackedAlertsSummary {
+    return {
+      instanceName,
+      targetName,
+      outputDir: this.repository.alertsRootPath(instanceName, targetName),
+      manifestPath: this.repository.alertsManifestPath(instanceName, targetName),
+      alertCount: 0,
+      updatedCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
+      failedUids: [],
+      fileResults: [],
+    };
+  }
 
+  private uploadAlertChanged(summary: UploadAlertSummary): boolean {
+    return (
+      summary.ruleStatus === "updated" ||
+      summary.contactPointResults.some((result) => result.status === "updated")
+    );
+  }
+
+  private aggregateTargetAlertOperationResults(
+    targetResults: MultiTargetAlertOperationTargetResult[],
+  ): MultiTargetAlertOperationSummary {
+    return {
+      targetCount: targetResults.length,
+      alertCount: targetResults.reduce((sum, result) => sum + result.alertCount, 0),
+      updatedCount: targetResults.reduce((sum, result) => sum + result.updatedCount, 0),
+      skippedCount: targetResults.reduce((sum, result) => sum + result.skippedCount, 0),
+      failedCount: targetResults.reduce((sum, result) => sum + result.failedCount, 0),
+      targetResults,
+    };
+  }
+
+  private async exportAlertsByUids(
+    instanceName: string,
+    targetName: string,
+    selectedUids: string[],
+    options?: { continueOnMissing?: boolean },
+  ): Promise<PullTrackedAlertsSummary> {
     const target = await this.repository.deploymentTargetByName(instanceName, targetName);
     if (!target) {
       throw new Error(`Deployment target not found: ${instanceName}/${targetName}`);
+    }
+
+    const effectiveUids = [...new Set(selectedUids.map((uid) => uid.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    if (effectiveUids.length === 0) {
+      return this.emptyPullTrackedAlertsSummary(instanceName, target.name);
     }
 
     const client = await this.clientFactory(instanceName);
@@ -641,13 +685,8 @@ export class DashboardService {
       }
     }
 
-    const requestedUids = [...new Set((selectedUids ?? []).map((uid) => uid.trim()).filter(Boolean))];
-    const effectiveUids = requestedUids.length > 0 ? requestedUids : [...ruleByUid.keys()].sort((a, b) => a.localeCompare(b));
-    if (effectiveUids.length === 0) {
-      throw new Error(`No alert rules available in ${instanceName}.`);
-    }
     const missingUids = effectiveUids.filter((uid) => !ruleByUid.has(uid));
-    if (missingUids.length > 0) {
+    if (missingUids.length > 0 && options?.continueOnMissing !== true) {
       throw new Error(`Selected alert rules are not available in ${instanceName}: ${missingUids.join(", ")}`);
     }
 
@@ -679,12 +718,18 @@ export class DashboardService {
     let updatedCount = 0;
     let skippedCount = 0;
     const fileResults: AlertStorageFileResult[] = [];
+    const failedUids: string[] = [];
 
     const makeRelativePath = (targetPath: string): string => path.relative(this.repository.projectRootPath, targetPath).replace(/\\/g, "/");
     const usedContactPointKeys = new Set(Object.keys(nextManifest.contactPoints));
 
     for (const uid of effectiveUids) {
-      const remoteRule = ruleByUid.get(uid)!;
+      const remoteRule = ruleByUid.get(uid);
+      if (!remoteRule) {
+        failedUids.push(uid);
+        continue;
+      }
+
       const normalizedRule = normalizeAlertRuleForStorage(remoteRule);
       const rulePath = this.repository.alertRuleFilePath(instanceName, target.name, uid);
       const relativeRulePath = path.relative(targetRoot, rulePath).replace(/\\/g, "/");
@@ -767,33 +812,59 @@ export class DashboardService {
       };
     }
 
-    const manifestPath = this.repository.alertsManifestPath(instanceName, target.name);
-    const manifestOutcome = await this.repository.syncPulledFile({
-      sourceContent: stableJsonStringify(nextManifest),
-      targetPath: manifestPath,
-    });
-    if (manifestOutcome.status === "updated") {
-      updatedCount += 1;
-    } else {
-      skippedCount += 1;
+    if (fileResults.length > 0) {
+      const manifestPath = this.repository.alertsManifestPath(instanceName, target.name);
+      const manifestOutcome = await this.repository.syncPulledFile({
+        sourceContent: stableJsonStringify(nextManifest),
+        targetPath: manifestPath,
+      });
+      if (manifestOutcome.status === "updated") {
+        updatedCount += 1;
+      } else {
+        skippedCount += 1;
+      }
+      fileResults.push({
+        kind: "manifest",
+        relativePath: makeRelativePath(manifestPath),
+        status: manifestOutcome.status,
+        targetPath: manifestPath,
+      });
     }
-    fileResults.push({
-      kind: "manifest",
-      relativePath: makeRelativePath(manifestPath),
-      status: manifestOutcome.status,
-      targetPath: manifestPath,
-    });
 
     return {
       instanceName,
       targetName: target.name,
       outputDir: this.repository.alertsRootPath(instanceName, target.name),
-      manifestPath,
-      selectedCount: effectiveUids.length,
+      manifestPath: this.repository.alertsManifestPath(instanceName, target.name),
+      alertCount: effectiveUids.length,
       updatedCount,
       skippedCount,
+      failedCount: failedUids.length,
+      failedUids,
       fileResults,
     };
+  }
+
+  async exportAlerts(
+    instanceName?: string,
+    targetName = DEFAULT_DEPLOYMENT_TARGET,
+  ): Promise<PullTrackedAlertsSummary> {
+    if (!instanceName) {
+      throw new Error("Choose a concrete Grafana instance and deployment target for alerts pull.");
+    }
+
+    const trackedUids = await this.repository.listTrackedAlertUids(instanceName, targetName);
+    return this.exportAlertsByUids(instanceName, targetName, trackedUids, {
+      continueOnMissing: true,
+    });
+  }
+
+  async addAlerts(
+    instanceName: string,
+    targetName: string,
+    alertUids: string[],
+  ): Promise<ExportSelectedAlertsSummary> {
+    return this.exportSelectedAlerts(instanceName, targetName, alertUids);
   }
 
   async exportSelectedAlerts(
@@ -801,7 +872,90 @@ export class DashboardService {
     targetName: string,
     alertUids: string[],
   ): Promise<ExportSelectedAlertsSummary> {
-    return this.exportAlerts(instanceName, targetName, alertUids);
+    const summary = await this.exportAlertsByUids(instanceName, targetName, alertUids);
+    return {
+      instanceName: summary.instanceName,
+      targetName: summary.targetName,
+      outputDir: summary.outputDir,
+      manifestPath: summary.manifestPath,
+      selectedCount: summary.alertCount,
+      updatedCount: summary.updatedCount,
+      skippedCount: summary.skippedCount,
+      fileResults: summary.fileResults,
+    };
+  }
+
+  async pullTrackedAlertsForTargets(targets: DeploymentTargetRecord[]): Promise<MultiTargetAlertOperationSummary> {
+    const targetResults: MultiTargetAlertOperationTargetResult[] = [];
+
+    for (const target of targets) {
+      const summary = await this.exportAlerts(target.instanceName, target.name);
+      targetResults.push({
+        instanceName: summary.instanceName,
+        targetName: summary.targetName,
+        alertCount: summary.alertCount,
+        updatedCount: summary.updatedCount,
+        skippedCount: summary.skippedCount,
+        failedCount: summary.failedCount,
+      });
+    }
+
+    return this.aggregateTargetAlertOperationResults(targetResults);
+  }
+
+  async deployTrackedAlerts(
+    instanceName: string,
+    targetName: string,
+  ): Promise<DeployTrackedAlertsSummary> {
+    const trackedUids = await this.repository.listTrackedAlertUids(instanceName, targetName);
+    const results: UploadAlertSummary[] = [];
+    const failedUids: string[] = [];
+    let updatedCount = 0;
+    let skippedCount = 0;
+
+    for (const uid of trackedUids) {
+      try {
+        const summary = await this.uploadAlert(instanceName, targetName, uid);
+        results.push(summary);
+        if (this.uploadAlertChanged(summary)) {
+          updatedCount += 1;
+        } else {
+          skippedCount += 1;
+        }
+      } catch (error) {
+        failedUids.push(uid);
+        this.log.error(`Failed to deploy alert ${uid} on ${instanceName}/${targetName}: ${String(error)}`);
+      }
+    }
+
+    return {
+      instanceName,
+      targetName,
+      alertCount: trackedUids.length,
+      updatedCount,
+      skippedCount,
+      failedCount: failedUids.length,
+      failedUids,
+      results,
+    };
+  }
+
+  async deployTrackedAlertsForTargets(targets: DeploymentTargetRecord[]): Promise<MultiTargetAlertOperationSummary> {
+    const targetResults: MultiTargetAlertOperationTargetResult[] = [];
+
+    for (const target of targets) {
+      const summary = await this.deployTrackedAlerts(target.instanceName, target.name);
+      targetResults.push({
+        instanceName: summary.instanceName,
+        targetName: summary.targetName,
+        alertCount: summary.alertCount,
+        updatedCount: summary.updatedCount,
+        skippedCount: summary.skippedCount,
+        failedCount: summary.failedCount,
+      });
+    }
+
+    return this.aggregateTargetAlertOperationResults(targetResults);
   }
 
   private async alertSyncStatus(
