@@ -1302,7 +1302,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       (item?: DashboardTreeItem | InstanceTreeItem | DeploymentTargetTreeItem | InstanceTargetDashboardTreeItem) =>
       pullDashboards(item),
     ),
-    vscode.commands.registerCommand("grafanaDashboards.pullAllDashboards", (item?: InstanceTreeItem | DeploymentTargetTreeItem) =>
+    vscode.commands.registerCommand("grafanaDashboards.pullAllDashboards", (item?: DevTargetTreeItem | InstanceTreeItem | DeploymentTargetTreeItem) =>
       pullAllDashboards(item),
     ),
     vscode.commands.registerCommand(
@@ -2350,7 +2350,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.window.showInformationMessage(`Alert ${uid} status on ${instanceName}/${targetName}: ${syncStatus}.`);
   }
 
-  async function pullAllDashboards(item?: InstanceTreeItem | DeploymentTargetTreeItem): Promise<void> {
+  async function pullAllDashboards(item?: DevTargetTreeItem | InstanceTreeItem | DeploymentTargetTreeItem): Promise<void> {
+    if (item instanceof DevTargetTreeItem || !item) {
+      await actionHandlers.pullAllDashboards();
+      return;
+    }
+
     if (item instanceof InstanceTreeItem) {
       await actionHandlers.pullAllDashboards(item.instance.name);
       return;

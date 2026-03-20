@@ -75,14 +75,17 @@ project-root/
 8. Добавь дашборд в проект:
    - `Grafana Sync: Add Dashboard`
 9. Выполни `pull`:
-   - `Grafana Sync: Pull Dashboard From Dev Target`
+   - для одного dashboard: `Grafana Sync: Pull Dashboard From Dev Target`
+   - для всех dashboards: `Grafana -> Instances -> Dev Target -> Pull All Dashboards From Dev Target`
 
 ## Ежедневный Workflow
 
 Обычный цикл работы выглядит так:
 
 1. Изменить дашборд в dev Grafana.
-2. Выполнить `Grafana Sync: Pull Dashboard From Dev Target`.
+2. Выполнить `pull`:
+   - одного dashboard через `Dashboards`
+   - или всех dashboards через `Instances -> Dev Target`
 3. Проверить или обновить:
    - datasource mappings
    - variable overrides
@@ -118,15 +121,14 @@ project-root/
 Или:
 
 - Раздел: `Grafana -> Instances`
-- Внутри:
-  `instance`, `target` или `dashboard` под target
+- Внутри: выбрать item `Dev Target`
 - Нажать:
-  `inline/context action -> Grafana Sync: Pull Dashboard From Dev Target`
+  `ПКМ / context menu -> Grafana Sync: Pull All Dashboards From Dev Target`
 
 Важно:
 
 - `pull` dashboards всегда идет только из `dev target`
-- если выбран не `dev target`, команда завершится ошибкой
+- поэтому в `Instances` команда массового `pull` теперь находится только на item `Dev Target`
 
 ### Checkout Revision
 

@@ -82,7 +82,9 @@ Instance and deployment-target definitions live in `.grafana-dashboard-workspace
 ### Pull
 
 - `Grafana Sync: Pull Dashboard From Dev Target`
-- pull actions from the `Dashboards` and `Instances` trees use the same dev-target rule
+- `Grafana Sync: Pull All Dashboards From Dev Target`
+
+Single-dashboard pull lives in `Dashboards`; mass pull lives on the `Dev Target` item in `Instances`.
 
 These commands fetch dashboards from the selected instance and persist them into `dashboards/` according to the workspace config manifest.
 

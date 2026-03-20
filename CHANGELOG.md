@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.9.9 - 2026-03-20
+
+- Moved mass dashboard pull in the Instances view onto the dedicated Dev Target item and removed misleading pull actions from regular instance and target entries.
+
 ## 0.9.8 - 2026-03-20
 
 - Added bulk revision actions from the dashboard revisions tree to set or deploy one revision across selected target scopes.

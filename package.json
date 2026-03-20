@@ -2,7 +2,7 @@
   "name": "grafana-dashboard-sync",
   "displayName": "Grafana Dashboard Sync",
   "description": "Manage Grafana dashboards from VS Code with pull, render, deploy, backup, and datasource mapping workflows.",
-  "version": "0.9.8",
+  "version": "0.9.9",
   "publisher": "vaslit",
   "license": "MIT",
   "repository": {
@@ -40,6 +40,7 @@
     "onCommand:grafanaDashboards.initializeProject",
     "onCommand:grafanaDashboards.selectActiveInstance",
     "onCommand:grafanaDashboards.selectDevTarget",
+    "onCommand:grafanaDashboards.pullAllDashboards",
     "onCommand:grafanaDashboards.createDeploymentTarget",
     "onCommand:grafanaDashboards.renameDeploymentTarget",
     "onCommand:grafanaDashboards.removeDeploymentTarget",
@@ -118,6 +119,10 @@
       {
         "command": "grafanaDashboards.selectDevTarget",
         "title": "Grafana Sync: Select Dev Target"
+      },
+      {
+        "command": "grafanaDashboards.pullAllDashboards",
+        "title": "Grafana Sync: Pull All Dashboards From Dev Target"
       },
       {
         "command": "grafanaDashboards.setInstanceToken",
@@ -368,11 +373,6 @@
           "group": "inline@3"
         },
         {
-          "command": "grafanaDashboards.pullDashboard",
-          "when": "view == grafanaDashboards.instances && (viewItem == grafanaInstance || viewItem == grafanaDeploymentTarget || viewItem == grafanaInstanceDashboard)",
-          "group": "inline@1"
-        },
-        {
           "command": "grafanaDashboards.deployDashboard",
           "when": "view == grafanaDashboards.instances && (viewItem == grafanaInstance || viewItem == grafanaDeploymentTarget || viewItem == grafanaInstanceDashboard)",
           "group": "inline@2"
@@ -458,14 +458,14 @@
           "group": "navigation"
         },
         {
+          "command": "grafanaDashboards.pullAllDashboards",
+          "when": "view == grafanaDashboards.instances && viewItem == grafanaDevTargetSelector",
+          "group": "navigation@1"
+        },
+        {
           "command": "grafanaDashboards.createDeploymentTarget",
           "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
           "group": "navigation@4"
-        },
-        {
-          "command": "grafanaDashboards.pullDashboard",
-          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstance",
-          "group": "navigation@5"
         },
         {
           "command": "grafanaDashboards.deployDashboard",
@@ -523,11 +523,6 @@
           "group": "navigation@0.5"
         },
         {
-          "command": "grafanaDashboards.pullDashboard",
-          "when": "view == grafanaDashboards.instances && viewItem == grafanaInstanceDashboard",
-          "group": "navigation@1"
-        },
-        {
           "command": "grafanaDashboards.deployDashboard",
           "when": "view == grafanaDashboards.instances && viewItem == grafanaInstanceDashboard",
           "group": "navigation@2"
@@ -566,11 +561,6 @@
           "command": "grafanaDashboards.removeAlertFromProject",
           "when": "view == grafanaDashboards.instances && viewItem == grafanaInstanceAlert",
           "group": "navigation@10"
-        },
-        {
-          "command": "grafanaDashboards.pullDashboard",
-          "when": "view == grafanaDashboards.instances && viewItem == grafanaDeploymentTarget",
-          "group": "navigation@8.5"
         },
         {
           "command": "grafanaDashboards.deployDashboard",
