@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.9.8 - 2026-03-20
+
+- Added bulk revision actions from the dashboard revisions tree to set or deploy one revision across selected target scopes.
+
+## 0.9.7 - 2026-03-20
+
+- Added fallback Grafana URLs per instance and automatic retry to the next configured address when the primary host is unavailable.
+
 ## 0.9.6 - 2026-03-20
 
 - Bumped extension version for the workspace-layout update release.

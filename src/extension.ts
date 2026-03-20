@@ -787,6 +787,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await refreshAll();
       void vscode.window.showInformationMessage(`Target revision set to ${revisionId} for ${instanceName}/${targetName}.`);
     },
+    setRevisionOnTargets: async (selectorName: string, revisionId: string, targets: DeploymentTargetRecord[]) => {
+      const service = requireService();
+      const record = await requireDashboardRecord(selectorName);
+      const successes: string[] = [];
+      const failures: string[] = [];
+
+      for (const target of targets) {
+        try {
+          await service.setTargetRevision(record.entry, revisionId, target.instanceName, target.name);
+          successes.push(`${target.instanceName}/${target.name}`);
+        } catch (error) {
+          const failure = `${target.instanceName}/${target.name}: ${String(error)}`;
+          failures.push(failure);
+          log.error(`Failed to set revision ${revisionId} for ${selectorName} on ${failure}`);
+        }
+      }
+
+      await refreshAll();
+      if (failures.length === 0) {
+        void vscode.window.showInformationMessage(
+          `Revision ${revisionId} set for ${selectorName} on ${successes.length} target(s).`,
+        );
+        return;
+      }
+
+      void vscode.window.showWarningMessage(
+        `Revision ${revisionId} set for ${selectorName} on ${successes.length} target(s); ${failures.length} target(s) failed. See Grafana Dashboards output.`,
+      );
+    },
     deleteRevision: async (selectorName: string, revisionId: string) => {
       const service = requireService();
       const record = await requireDashboardRecord(selectorName);
@@ -809,6 +838,37 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await refreshAll();
       void vscode.window.showInformationMessage(
         `Revision deploy complete: ${summary.dashboardResults.length} dashboard(s) deployed to ${instanceName}/${targetName}.`,
+      );
+    },
+    deployRevisionOnTargets: async (selectorName: string, revisionId: string, targets: DeploymentTargetRecord[]) => {
+      const service = requireService();
+      const record = await requireDashboardRecord(selectorName);
+      const successes: string[] = [];
+      const failures: string[] = [];
+      let deployedCount = 0;
+
+      for (const target of targets) {
+        try {
+          const summary = await service.deployRevision(record.entry, revisionId, target.instanceName, target.name);
+          deployedCount += summary.dashboardResults.length;
+          successes.push(`${target.instanceName}/${target.name}`);
+        } catch (error) {
+          const failure = `${target.instanceName}/${target.name}: ${String(error)}`;
+          failures.push(failure);
+          log.error(`Failed to deploy revision ${revisionId} for ${selectorName} on ${failure}`);
+        }
+      }
+
+      await refreshAll();
+      if (failures.length === 0) {
+        void vscode.window.showInformationMessage(
+          `Revision ${revisionId} deployed for ${selectorName} to ${successes.length} target(s).`,
+        );
+        return;
+      }
+
+      void vscode.window.showWarningMessage(
+        `Revision ${revisionId} deployed for ${selectorName} to ${successes.length} target(s) (${deployedCount} deployment(s)); ${failures.length} target(s) failed. See Grafana Dashboards output.`,
       );
     },
     deployLatestRevision: async (selectorName: string, instanceName: string, targetName: string) => {
@@ -1212,8 +1272,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("grafanaDashboards.setTargetRevisionFromTree", (item?: DashboardRevisionTreeItem) =>
       setTargetRevisionFromTree(item),
     ),
+    vscode.commands.registerCommand("grafanaDashboards.setRevisionOnTargetsFromTree", (item?: DashboardRevisionTreeItem) =>
+      setRevisionOnTargetsFromTree(item),
+    ),
     vscode.commands.registerCommand("grafanaDashboards.deployRevisionToActiveTargetFromTree", (item?: DashboardRevisionTreeItem) =>
       deployRevisionToActiveTargetFromTree(item),
+    ),
+    vscode.commands.registerCommand("grafanaDashboards.deployRevisionOnTargetsFromTree", (item?: DashboardRevisionTreeItem) =>
+      deployRevisionOnTargetsFromTree(item),
     ),
     vscode.commands.registerCommand("grafanaDashboards.deleteRevisionFromTree", (item?: DashboardRevisionTreeItem) =>
       deleteRevisionFromTree(item),
@@ -1695,6 +1761,118 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return pickDeploymentTargetIfNeeded(explicitInstanceName, explicitTargetName);
   }
 
+  async function pickRevisionTargetScope(
+    action: "set" | "deploy",
+  ): Promise<{
+    targets: DeploymentTargetRecord[];
+    label: string;
+  } | undefined> {
+    const repository = requireRepository();
+    const allTargets = await repository.listAllDeploymentTargets();
+    if (allTargets.length === 0) {
+      throw new Error("No deployment targets available.");
+    }
+
+    const activeTarget =
+      selectionState.activeInstanceName && selectionState.activeTargetName
+        ? await repository.deploymentTargetByName(selectionState.activeInstanceName, selectionState.activeTargetName)
+        : undefined;
+    const activeInstanceTargets = activeTarget
+      ? await repository.listDeploymentTargets(activeTarget.instanceName)
+      : [];
+    const actionLabel = action === "set" ? "set revision" : "deploy revision";
+
+    const scopeOptions: Array<{
+      label: string;
+      description?: string;
+      key: "active" | "selected" | "active-instance" | "all";
+    }> = [];
+
+    if (activeTarget) {
+      scopeOptions.push({
+        label: "Current Active Target",
+        description: `${activeTarget.instanceName}/${activeTarget.name}`,
+        key: "active",
+      });
+      scopeOptions.push({
+        label: "All Targets In Active Instance",
+        description: `${activeTarget.instanceName} (${activeInstanceTargets.length} target(s))`,
+        key: "active-instance",
+      });
+    }
+
+    scopeOptions.push({
+      label: "Targets...",
+      description: "Select one or more deployment targets",
+      key: "selected",
+    });
+    scopeOptions.push({
+      label: "All Targets",
+      description: `${allTargets.length} target(s)`,
+      key: "all",
+    });
+
+    const scope = await vscode.window.showQuickPick(scopeOptions, {
+      title: `Choose scope to ${actionLabel}`,
+      placeHolder: "Use the active target, choose targets manually, or apply to all targets.",
+    });
+
+    if (!scope) {
+      return undefined;
+    }
+
+    if (scope.key === "active") {
+      return {
+        targets: [activeTarget!],
+        label: `${activeTarget!.instanceName}/${activeTarget!.name}`,
+      };
+    }
+
+    if (scope.key === "active-instance") {
+      return {
+        targets: activeInstanceTargets,
+        label: `${activeTarget!.instanceName} (${activeInstanceTargets.length} target(s))`,
+      };
+    }
+
+    if (scope.key === "all") {
+      const confirmed = await vscode.window.showWarningMessage(
+        `${action === "set" ? "Set" : "Deploy"} revision on all ${allTargets.length} targets?`,
+        { modal: true },
+        action === "set" ? "Set On All Targets" : "Deploy To All Targets",
+      );
+      const expectedConfirmation = action === "set" ? "Set On All Targets" : "Deploy To All Targets";
+      if (confirmed !== expectedConfirmation) {
+        return undefined;
+      }
+      return {
+        targets: allTargets,
+        label: `all ${allTargets.length} target(s)`,
+      };
+    }
+
+    const selectedTargets = await vscode.window.showQuickPick(
+      allTargets.map((target) => ({
+        label: `${target.instanceName}/${target.name}`,
+        target,
+      })),
+      {
+        canPickMany: true,
+        title: `Choose targets to ${actionLabel}`,
+        placeHolder: "Select one or more deployment targets.",
+      },
+    );
+
+    if (!selectedTargets || selectedTargets.length === 0) {
+      return undefined;
+    }
+
+    return {
+      targets: selectedTargets.map((item) => item.target),
+      label: `${selectedTargets.length} selected target(s)`,
+    };
+  }
+
   async function openFile(filePath: string): Promise<void> {
     const document = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
     await vscode.window.showTextDocument(document, { preview: false });
@@ -1742,6 +1920,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await actionHandlers.setTargetRevision(item.record.selectorName, item.revision.record.id, target.instanceName, target.name);
   }
 
+  async function setRevisionOnTargetsFromTree(item?: DashboardRevisionTreeItem): Promise<void> {
+    if (!item) {
+      throw new Error("Select a dashboard revision first.");
+    }
+    const scope = await pickRevisionTargetScope("set");
+    if (!scope) {
+      return;
+    }
+    selectionState.setDashboard(item.record.selectorName);
+    await actionHandlers.setRevisionOnTargets(item.record.selectorName, item.revision.record.id, scope.targets);
+  }
+
   async function deployRevisionToActiveTargetFromTree(item?: DashboardRevisionTreeItem): Promise<void> {
     if (!item) {
       throw new Error("Select a dashboard revision first.");
@@ -1752,6 +1942,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     selectionState.setTarget(target.name);
     selectionState.setActiveTarget(target.instanceName, target.name);
     await actionHandlers.deployRevision(item.record.selectorName, item.revision.record.id, target.instanceName, target.name);
+  }
+
+  async function deployRevisionOnTargetsFromTree(item?: DashboardRevisionTreeItem): Promise<void> {
+    if (!item) {
+      throw new Error("Select a dashboard revision first.");
+    }
+    const scope = await pickRevisionTargetScope("deploy");
+    if (!scope) {
+      return;
+    }
+    selectionState.setDashboard(item.record.selectorName);
+    await actionHandlers.deployRevisionOnTargets(item.record.selectorName, item.revision.record.id, scope.targets);
   }
 
   async function deleteRevisionFromTree(item?: DashboardRevisionTreeItem): Promise<void> {

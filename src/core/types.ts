@@ -10,6 +10,7 @@ export interface DashboardManifest {
 
 export interface WorkspaceInstanceConfig {
   grafanaUrl?: string;
+  grafanaFallbackUrls?: string[];
   grafanaUsername?: string;
   targets: Record<string, Record<string, never>>;
 }
@@ -151,6 +152,7 @@ export interface DeploymentTargetRecord {
 
 export interface EffectiveConnectionConfig {
   baseUrl: string;
+  baseUrls: string[];
   authKind: "bearer" | "basic";
   token?: string;
   username?: string;

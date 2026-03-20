@@ -37,6 +37,7 @@ import {
   AlertsManifest,
   CopyAlertSummary,
   ExportSelectedAlertsSummary,
+  EffectiveConnectionConfig,
   BackupDashboardRecord,
   BackupRecord,
   BackupRestoreSelection,
@@ -387,12 +388,35 @@ async function collectFolderPaths(
 }
 
 export class DashboardService {
+  private readonly clientFactory: (instanceName?: string) => Promise<GrafanaApi>;
+  private readonly hasCustomClientFactory: boolean;
+
   constructor(
     private readonly repository: ProjectRepository,
     private readonly log: LogSink,
-    private readonly clientFactory: (instanceName?: string) => Promise<GrafanaApi> = async (instanceName?: string) =>
-      new GrafanaClient(await repository.loadConnectionConfig(instanceName)),
-  ) {}
+    clientFactory?: (instanceName?: string) => Promise<GrafanaApi>,
+  ) {
+    this.hasCustomClientFactory = Boolean(clientFactory);
+    this.clientFactory =
+      clientFactory ??
+      (async (instanceName?: string) => new GrafanaClient(await repository.loadConnectionConfig(instanceName)));
+  }
+
+  private async loadClientRuntime(
+    instanceName: string,
+  ): Promise<{ client: GrafanaApi; connection: EffectiveConnectionConfig }> {
+    const connection = await this.repository.loadConnectionConfig(instanceName);
+    if (this.hasCustomClientFactory) {
+      return {
+        client: await this.clientFactory(instanceName),
+        connection,
+      };
+    }
+    return {
+      client: new GrafanaClient(connection),
+      connection,
+    };
+  }
 
   async listRemoteDashboards(instanceName?: string): Promise<GrafanaDashboardSummary[]> {
     const client = await this.clientFactory(instanceName);
@@ -2087,8 +2111,7 @@ export class DashboardService {
     for (const target of selectedTargets) {
       let runtime = clients.get(target.instanceName);
       if (!runtime) {
-        const client = await this.clientFactory(target.instanceName);
-        const connection = await this.repository.loadConnectionConfig(target.instanceName);
+        const { client, connection } = await this.loadClientRuntime(target.instanceName);
         runtime = {
           client,
           baseUrl: connection.baseUrl,
@@ -2312,19 +2335,23 @@ export class DashboardService {
       throw new Error(`Dashboard UID is not materialized for ${selectorNameForEntry(entry)} on ${instanceName}/${targetName}.`);
     }
 
-    const instanceValues = await this.repository.loadInstanceEnvValues(instanceName);
-    const baseUrl = instanceValues.GRAFANA_URL?.trim();
-    if (!baseUrl) {
+    const connection = await this.repository.loadConnectionConfig(instanceName);
+    if (!connection.baseUrl) {
       throw new Error(`GRAFANA_URL is not configured for ${instanceName}.`);
     }
 
-    const fallbackUrl = new URL(`d/${encodeURIComponent(effectiveDashboardUid)}`, `${baseUrl.replace(/\/+$/, "")}/`).toString();
+    const fallbackUrl = new URL(`d/${encodeURIComponent(effectiveDashboardUid)}`, `${connection.baseUrl.replace(/\/+$/, "")}/`).toString();
 
     try {
-      const client = await this.clientFactory(instanceName);
+      const client = this.hasCustomClientFactory
+        ? await this.clientFactory(instanceName)
+        : new GrafanaClient(connection);
       const response = await client.getDashboardByUid(effectiveDashboardUid);
       const metaUrl = response.meta.url?.trim();
-      return metaUrl ? new URL(metaUrl, `${baseUrl.replace(/\/+$/, "")}/`).toString() : fallbackUrl;
+      const activeBaseUrl = connection.baseUrl.replace(/\/+$/, "");
+      return metaUrl
+        ? new URL(metaUrl, `${activeBaseUrl}/`).toString()
+        : new URL(`d/${encodeURIComponent(effectiveDashboardUid)}`, `${activeBaseUrl}/`).toString();
     } catch {
       return fallbackUrl;
     }
@@ -2676,8 +2703,7 @@ export class DashboardService {
       throw new Error("Choose a concrete Grafana instance and deployment target for deploy.");
     }
 
-    const client = await this.clientFactory(instanceName);
-    const connection = await this.repository.loadConnectionConfig(instanceName);
+    const { client, connection } = await this.loadClientRuntime(instanceName);
     const folderCache = await client.listFolders();
 
     await this.materializeDashboardUidsForInstance(sourceRepository, instanceName);

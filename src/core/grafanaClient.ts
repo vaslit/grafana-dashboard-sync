@@ -218,7 +218,46 @@ export class GrafanaClient implements GrafanaApi {
     body?: unknown,
     extraHeaders?: Record<string, string>,
   ): Promise<string> {
-    const url = new URL(requestPath, `${this.connection.baseUrl}/`);
+    const orderedBaseUrls = [
+      ...new Set([this.connection.baseUrl, ...this.connection.baseUrls].map((value) => value.trim()).filter(Boolean)),
+    ];
+    let lastError: unknown;
+
+    for (const candidateBaseUrl of orderedBaseUrls) {
+      try {
+        const normalizedBaseUrl = candidateBaseUrl.replace(/\/+$/, "");
+        const responseText = await this.requestRawAgainstBaseUrl(
+          normalizedBaseUrl,
+          method,
+          requestPath,
+          body,
+          extraHeaders,
+        );
+        this.connection.baseUrl = normalizedBaseUrl;
+        this.connection.baseUrls = [
+          normalizedBaseUrl,
+          ...orderedBaseUrls.map((value) => value.replace(/\/+$/, "")).filter((value) => value !== normalizedBaseUrl),
+        ];
+        return responseText;
+      } catch (error) {
+        lastError = error;
+        if (!(error instanceof Error) || !(error as Error & { retryable?: boolean }).retryable) {
+          throw error;
+        }
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error(`Grafana API ${method} ${requestPath} failed.`);
+  }
+
+  private async requestRawAgainstBaseUrl(
+    baseUrl: string,
+    method: "GET" | "POST" | "PUT",
+    requestPath: string,
+    body?: unknown,
+    extraHeaders?: Record<string, string>,
+  ): Promise<string> {
+    const url = new URL(requestPath, `${baseUrl}/`);
     const payload = body === undefined ? undefined : JSON.stringify(body);
     const client = url.protocol === "https:" ? https : http;
 
@@ -257,11 +296,11 @@ export class GrafanaClient implements GrafanaApi {
             const statusCode = response.statusCode ?? 0;
 
             if (statusCode < 200 || statusCode >= 300) {
-              reject(
-                new Error(
-                  `Grafana API ${method} ${url.pathname} failed with ${statusCode}: ${text || response.statusMessage}`,
-                ),
-              );
+              const error = new Error(
+                `Grafana API ${method} ${url.pathname} failed with ${statusCode}: ${text || response.statusMessage}`,
+              ) as Error & { retryable?: boolean };
+              error.retryable = statusCode === 502 || statusCode === 503 || statusCode === 504;
+              reject(error);
               return;
             }
             resolve(text);
@@ -270,7 +309,11 @@ export class GrafanaClient implements GrafanaApi {
       );
 
       request.on("error", (error) => {
-        reject(error);
+        const retryable = new Error(
+          `Grafana API ${method} ${url.pathname} failed for ${baseUrl}: ${String(error)}`,
+        ) as Error & { retryable?: boolean };
+        retryable.retryable = true;
+        reject(retryable);
       });
 
       if (payload !== undefined) {

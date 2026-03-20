@@ -2,7 +2,7 @@
   "name": "grafana-dashboard-sync",
   "displayName": "Grafana Dashboard Sync",
   "description": "Manage Grafana dashboards from VS Code with pull, render, deploy, backup, and datasource mapping workflows.",
-  "version": "0.9.6",
+  "version": "0.9.8",
   "publisher": "vaslit",
   "license": "MIT",
   "repository": {
@@ -49,7 +49,9 @@
     "onCommand:grafanaDashboards.clearInstancePassword",
     "onCommand:grafanaDashboards.checkoutRevisionFromTree",
     "onCommand:grafanaDashboards.setTargetRevisionFromTree",
+    "onCommand:grafanaDashboards.setRevisionOnTargetsFromTree",
     "onCommand:grafanaDashboards.deployRevisionToActiveTargetFromTree",
+    "onCommand:grafanaDashboards.deployRevisionOnTargetsFromTree",
     "onCommand:grafanaDashboards.deleteRevisionFromTree",
     "onCommand:grafanaDashboards.openDashboardInBrowser",
     "onCommand:grafanaDashboards.createBackup",
@@ -142,8 +144,16 @@
         "title": "Grafana Sync: Set Revision On Active Target"
       },
       {
+        "command": "grafanaDashboards.setRevisionOnTargetsFromTree",
+        "title": "Grafana Sync: Set Revision On Targets..."
+      },
+      {
         "command": "grafanaDashboards.deployRevisionToActiveTargetFromTree",
         "title": "Grafana Sync: Deploy Revision To Active Target"
+      },
+      {
+        "command": "grafanaDashboards.deployRevisionOnTargetsFromTree",
+        "title": "Grafana Sync: Deploy Revision On Targets..."
       },
       {
         "command": "grafanaDashboards.deleteRevisionFromTree",
@@ -423,9 +433,19 @@
           "group": "navigation@2"
         },
         {
+          "command": "grafanaDashboards.setRevisionOnTargetsFromTree",
+          "when": "view == grafanaDashboards.dashboards && viewItem == grafanaDashboardRevision",
+          "group": "navigation@2.5"
+        },
+        {
           "command": "grafanaDashboards.deployRevisionToActiveTargetFromTree",
           "when": "view == grafanaDashboards.dashboards && viewItem == grafanaDashboardRevision",
           "group": "navigation@3"
+        },
+        {
+          "command": "grafanaDashboards.deployRevisionOnTargetsFromTree",
+          "when": "view == grafanaDashboards.dashboards && viewItem == grafanaDashboardRevision",
+          "group": "navigation@3.5"
         },
         {
           "command": "grafanaDashboards.deleteRevisionFromTree",

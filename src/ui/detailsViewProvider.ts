@@ -890,9 +890,14 @@ export class DetailsViewProvider implements vscode.WebviewViewProvider {
           <input type="text" name="GRAFANA_URL" value="${escapeHtml(envValues.GRAFANA_URL ?? "")}" />
         </label>
         <label>
+          GRAFANA_URL_FALLBACKS
+          <textarea name="GRAFANA_URL_FALLBACKS" rows="3">${escapeHtml(envValues.GRAFANA_URL_FALLBACKS ?? "")}</textarea>
+        </label>
+        <label>
           GRAFANA_USERNAME
           <input type="text" name="GRAFANA_USERNAME" value="${escapeHtml(envValues.GRAFANA_USERNAME ?? "")}" />
         </label>
+        <div class="small">Fallback URLs: one URL per line, used only when the primary Grafana URL is unavailable.</div>
         <div class="small">Token auth: ${escapeHtml(instance.tokenConfigured ? `configured via ${instance.tokenSourceLabel ?? "Secret Storage"}` : "missing")}</div>
         <div class="small">Password auth: ${escapeHtml(instance.passwordConfigured ? `configured via ${instance.passwordSourceLabel ?? "Secret Storage"}` : "missing")}</div>
         <div class="small">Active auth mode: ${escapeHtml(instance.mergedConnection?.authKind ?? "(none)")}</div>

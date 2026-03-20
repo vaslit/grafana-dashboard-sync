@@ -49,6 +49,9 @@ Supported workspace config:
   "instances": {
     "dev": {
       "grafanaUrl": "http://localhost:3000",
+      "grafanaFallbackUrls": [
+        "http://grafana-dr:3000"
+      ],
       "targets": {
         "default": {}
       }
@@ -68,6 +71,7 @@ Instance and deployment-target definitions live in `.grafana-dashboard-workspace
 3. Create one or more instances in the `Instances` view.
 4. Configure authentication for each instance:
    - set `GRAFANA_URL` in `Details > Instance`
+   - optionally add `GRAFANA_URL_FALLBACKS` one URL per line
    - `Grafana Sync: Set Instance Token`
    - or `GRAFANA_USERNAME` + `Grafana Sync: Set Instance Password`
 5. Add dashboards to the project or pull them from a remote Grafana instance.

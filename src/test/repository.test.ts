@@ -30,6 +30,7 @@ test("loadConnectionConfig uses workspace config instance settings", async () =>
 
     const connection = await repositoryWithSecret.loadConnectionConfig("prod");
     assert.equal(connection.baseUrl, "http://prod");
+    assert.deepEqual(connection.baseUrls, ["http://prod"]);
     assert.equal(connection.authKind, "bearer");
     assert.equal(connection.token, "root-token");
     assert.equal(connection.sourceLabel, ".grafana-dashboard-workspace.json -> instances.prod");
@@ -51,6 +52,7 @@ test("loadConnectionConfig uses token resolver for instance secret", async () =>
 
     const connection = await repository.loadConnectionConfig("prod");
     assert.equal(connection.baseUrl, "http://prod");
+    assert.deepEqual(connection.baseUrls, ["http://prod"]);
     assert.equal(connection.authKind, "bearer");
     assert.equal(connection.token, "secret-token");
   } finally {
@@ -74,6 +76,7 @@ test("loadConnectionConfig falls back to basic auth when username and password a
 
     const connection = await repository.loadConnectionConfig("prod");
     assert.equal(connection.baseUrl, "http://prod");
+    assert.deepEqual(connection.baseUrls, ["http://prod"]);
     assert.equal(connection.authKind, "basic");
     assert.equal(connection.username, "grafana-user");
     assert.equal(connection.password, "secret-password");
@@ -238,6 +241,7 @@ test("saveInstanceEnvValues stores only non-secret instance config in workspace 
     await repository.createInstance("prod");
     await repository.saveInstanceEnvValues("prod", {
       GRAFANA_URL: "http://prod",
+      GRAFANA_URL_FALLBACKS: "http://prod-dr\nhttp://prod-alt/",
       GRAFANA_USERNAME: "grafana-user",
       GRAFANA_TOKEN: "should-not-be-written",
       GRAFANA_PASSWORD: "should-not-be-written",
@@ -245,11 +249,30 @@ test("saveInstanceEnvValues stores only non-secret instance config in workspace 
 
     assert.deepEqual((await repository.loadWorkspaceConfig()).instances.prod, {
       grafanaUrl: "http://prod",
+      grafanaFallbackUrls: ["http://prod-dr", "http://prod-alt"],
       grafanaUsername: "grafana-user",
       targets: {
         default: {},
       },
     });
+  });
+});
+
+test("loadConnectionConfig includes fallback Grafana URLs in order", async () => {
+  await withTempProject(async (_rootPath, repository) => {
+    const repositoryWithSecret = new ProjectRepository(repository.projectRootPath, {
+      resolveToken: async () => "root-token",
+    });
+    await repositoryWithSecret.ensureProjectLayout();
+    await repository.createInstance("prod");
+    await repository.saveInstanceEnvValues("prod", {
+      GRAFANA_URL: "http://prod",
+      GRAFANA_URL_FALLBACKS: "http://prod-dr\nhttp://prod-alt/",
+    });
+
+    const connection = await repositoryWithSecret.loadConnectionConfig("prod");
+    assert.equal(connection.baseUrl, "http://prod");
+    assert.deepEqual(connection.baseUrls, ["http://prod", "http://prod-dr", "http://prod-alt"]);
   });
 });
 

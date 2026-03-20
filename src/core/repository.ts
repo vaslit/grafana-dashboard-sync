@@ -82,6 +82,28 @@ async function copyDirectoryTree(sourceDir: string, targetDir: string): Promise<
   }
 }
 
+function normalizeGrafanaUrl(value: string): string {
+  return value.trim().replace(/\/+$/, "");
+}
+
+function normalizeGrafanaUrlList(values: string[]): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const next = normalizeGrafanaUrl(value);
+    if (!next || seen.has(next)) {
+      continue;
+    }
+    normalized.push(next);
+    seen.add(next);
+  }
+  return normalized;
+}
+
+function parseGrafanaFallbackUrls(value: string | undefined): string[] {
+  return normalizeGrafanaUrlList((value ?? "").split(/\r?\n|,/));
+}
+
 interface ProjectRepositoryOptions {
   resolveToken?: (instanceName?: string) => Promise<string | undefined>;
   resolvePassword?: (instanceName?: string) => Promise<string | undefined>;
@@ -390,6 +412,13 @@ function validateWorkspaceProjectConfig(config: WorkspaceProjectConfig, filePath
     if (instanceConfig.grafanaUrl !== undefined && typeof instanceConfig.grafanaUrl !== "string") {
       throw new Error(`Invalid workspace config grafanaUrl: ${filePath}`);
     }
+    if (
+      instanceConfig.grafanaFallbackUrls !== undefined &&
+      (!Array.isArray(instanceConfig.grafanaFallbackUrls) ||
+        instanceConfig.grafanaFallbackUrls.some((value) => typeof value !== "string"))
+    ) {
+      throw new Error(`Invalid workspace config grafanaFallbackUrls: ${filePath}`);
+    }
     if (instanceConfig.grafanaUsername !== undefined && typeof instanceConfig.grafanaUsername !== "string") {
       throw new Error(`Invalid workspace config grafanaUsername: ${filePath}`);
     }
@@ -401,8 +430,16 @@ function validateWorkspaceProjectConfig(config: WorkspaceProjectConfig, filePath
         throw new Error(`Invalid workspace config target name: ${filePath}`);
       }
     }
+    const primaryGrafanaUrl = instanceConfig.grafanaUrl ? normalizeGrafanaUrl(instanceConfig.grafanaUrl) : undefined;
+    const fallbackGrafanaUrls = normalizeGrafanaUrlList(
+      (instanceConfig.grafanaFallbackUrls ?? []).filter((value) => normalizeGrafanaUrl(value) !== primaryGrafanaUrl),
+    );
+    if (!primaryGrafanaUrl && fallbackGrafanaUrls.length > 0) {
+      throw new Error(`Invalid workspace config grafanaFallbackUrls: ${filePath}`);
+    }
     normalizedInstances[instanceName] = {
-      ...(instanceConfig.grafanaUrl ? { grafanaUrl: instanceConfig.grafanaUrl } : {}),
+      ...(primaryGrafanaUrl ? { grafanaUrl: primaryGrafanaUrl } : {}),
+      ...(fallbackGrafanaUrls.length > 0 ? { grafanaFallbackUrls: fallbackGrafanaUrls } : {}),
       ...(instanceConfig.grafanaUsername ? { grafanaUsername: instanceConfig.grafanaUsername } : {}),
       targets: Object.fromEntries(Object.keys(instanceConfig.targets).map((targetName) => [targetName, {}])),
     };
@@ -1514,6 +1551,7 @@ export class ProjectRepository {
 
     return {
       ...(instance.grafanaUrl ? { GRAFANA_URL: instance.grafanaUrl } : {}),
+      ...(instance.grafanaFallbackUrls?.length ? { GRAFANA_URL_FALLBACKS: instance.grafanaFallbackUrls.join("\n") } : {}),
       ...(instance.grafanaUsername ? { GRAFANA_USERNAME: instance.grafanaUsername } : {}),
     };
   }
@@ -1525,6 +1563,7 @@ export class ProjectRepository {
 
     const instanceValues = await this.loadInstanceEnvValues(instanceName);
     const baseUrl = instanceValues.GRAFANA_URL?.trim();
+    const fallbackUrls = parseGrafanaFallbackUrls(instanceValues.GRAFANA_URL_FALLBACKS);
     const username = instanceValues.GRAFANA_USERNAME?.trim();
     const token = (await this.resolveToken(instanceName))?.trim();
     const password = (await this.resolvePassword(instanceName))?.trim();
@@ -1535,6 +1574,7 @@ export class ProjectRepository {
     if (token) {
       return {
         baseUrl: baseUrl.replace(/\/+$/, ""),
+        baseUrls: normalizeGrafanaUrlList([baseUrl, ...fallbackUrls]),
         authKind: "bearer",
         token,
         sourceLabel: `${PROJECT_CONFIG_FILE} -> instances.${instanceName}`,
@@ -1543,6 +1583,7 @@ export class ProjectRepository {
     if (username && password) {
       return {
         baseUrl: baseUrl.replace(/\/+$/, ""),
+        baseUrls: normalizeGrafanaUrlList([baseUrl, ...fallbackUrls]),
         authKind: "basic",
         username,
         password,
@@ -1565,7 +1606,14 @@ export class ProjectRepository {
 
     config.instances[instanceName] = {
       ...instance,
-      ...(values.GRAFANA_URL?.trim() ? { grafanaUrl: values.GRAFANA_URL.trim() } : { grafanaUrl: undefined }),
+      ...(values.GRAFANA_URL?.trim() ? { grafanaUrl: normalizeGrafanaUrl(values.GRAFANA_URL) } : { grafanaUrl: undefined }),
+      ...(parseGrafanaFallbackUrls(values.GRAFANA_URL_FALLBACKS).length > 0
+        ? {
+            grafanaFallbackUrls: parseGrafanaFallbackUrls(values.GRAFANA_URL_FALLBACKS).filter(
+              (value) => value !== normalizeGrafanaUrl(values.GRAFANA_URL ?? ""),
+            ),
+          }
+        : { grafanaFallbackUrls: undefined }),
       ...(values.GRAFANA_USERNAME?.trim()
         ? { grafanaUsername: values.GRAFANA_USERNAME.trim() }
         : { grafanaUsername: undefined }),
