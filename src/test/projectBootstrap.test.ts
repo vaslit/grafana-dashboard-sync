@@ -28,8 +28,10 @@ test("initializeProjectDirectory creates marker file, layout and first instance"
       dashboardsDir: "dashboards",
       backupsDir: "backups",
       rendersDir: "renders",
+      alertsDir: "alerts",
       maxBackups: 20,
     });
+    assert.equal((await fs.stat(path.join(projectRoot, "alerts"))).isDirectory(), true);
     await assert.rejects(fs.stat(path.join(projectRoot, "instances")));
     assert.deepEqual(config.dashboards, []);
     assert.deepEqual(config.datasources, {});

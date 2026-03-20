@@ -20,11 +20,12 @@ export interface WorkspaceDevTargetConfig {
 }
 
 export interface WorkspaceProjectConfig {
-  version: 4;
+  version: 5;
   layout: {
     dashboardsDir: string;
     backupsDir: string;
     rendersDir: string;
+    alertsDir: string;
     maxBackups: number;
   };
   devTarget?: WorkspaceDevTargetConfig;

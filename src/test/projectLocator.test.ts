@@ -22,11 +22,12 @@ test("discoverProjectLayout finds nested marker file", async () => {
     await fs.writeFile(
       path.join(projectRoot, PROJECT_CONFIG_FILE),
       JSON.stringify({
-        version: 4,
+        version: 5,
         layout: {
           dashboardsDir: "dashboards",
           backupsDir: "backups",
           rendersDir: "renders",
+          alertsDir: "alerts",
           maxBackups: 20,
         },
         dashboards: [],
@@ -41,6 +42,7 @@ test("discoverProjectLayout finds nested marker file", async () => {
     assert.equal(layout.projectRootPath, projectRoot);
     assert.equal(layout.configPath, path.join(projectRoot, PROJECT_CONFIG_FILE));
     assert.equal(layout.dashboardsDir, path.join(projectRoot, "dashboards"));
+    assert.equal(layout.alertsDir, path.join(projectRoot, "alerts"));
   });
 });
 
@@ -51,11 +53,12 @@ test("discoverProjectLayout applies configured relative paths", async () => {
     await fs.writeFile(
       path.join(projectRoot, PROJECT_CONFIG_FILE),
       JSON.stringify({
-        version: 4,
+        version: 5,
         layout: {
           dashboardsDir: "data/dashboards",
           backupsDir: "data/backups",
           rendersDir: "build/renders",
+          alertsDir: "state/alerts",
           maxBackups: 7,
         },
         dashboards: [],
@@ -70,6 +73,7 @@ test("discoverProjectLayout applies configured relative paths", async () => {
     assert.equal(layout.dashboardsDir, path.join(projectRoot, "data", "dashboards"));
     assert.equal(layout.backupsDir, path.join(projectRoot, "data", "backups"));
     assert.equal(layout.rendersDir, path.join(projectRoot, "build", "renders"));
+    assert.equal(layout.alertsDir, path.join(projectRoot, "state", "alerts"));
     assert.equal(layout.maxBackups, 7);
   });
 });

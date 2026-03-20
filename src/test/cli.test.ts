@@ -101,11 +101,12 @@ test.skip("deploy_dashboards.sh materializes dashboardUid for non-default target
     const overridesPath = path.join(rootPath, "dashboards", "integration", ".overrides.json");
 
     await writeJson(workspaceConfigPath, {
-      version: 4,
+      version: 5,
       layout: {
         dashboardsDir: "dashboards",
         backupsDir: "backups",
         rendersDir: "renders",
+        alertsDir: "alerts",
         maxBackups: 20,
       },
       dashboards: [
@@ -196,11 +197,12 @@ test.skip("pull_dashboards.sh fetches target-specific uid and normalizes local u
     const overridesPath = path.join(rootPath, "dashboards", "integration", ".overrides.json");
 
     await writeJson(workspaceConfigPath, {
-      version: 4,
+      version: 5,
       layout: {
         dashboardsDir: "dashboards",
         backupsDir: "backups",
         rendersDir: "renders",
+        alertsDir: "alerts",
         maxBackups: 20,
       },
       dashboards: [

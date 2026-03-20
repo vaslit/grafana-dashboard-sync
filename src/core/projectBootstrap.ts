@@ -34,11 +34,12 @@ export async function initializeProjectDirectory(
   const repository = new ProjectRepository(defaultProjectLayout(projectRootPath, workspaceRootPath));
   await repository.ensureProjectLayout();
   const config: WorkspaceProjectConfig = {
-    version: 4,
+    version: 5,
     layout: {
       dashboardsDir: "dashboards",
       backupsDir: "backups",
       rendersDir: "renders",
+      alertsDir: "alerts",
       maxBackups: repository.maxBackups,
     },
     devTarget: {

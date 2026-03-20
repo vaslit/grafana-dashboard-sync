@@ -29,18 +29,19 @@ project-root/
   dashboards/
   backups/
   renders/
-  alerts/   # created on first alerts pull
+  alerts/
 ```
 
 Supported workspace config:
 
 ```json
 {
-  "version": 4,
+  "version": 5,
   "layout": {
     "dashboardsDir": "dashboards",
     "backupsDir": "backups",
     "rendersDir": "renders",
+    "alertsDir": "alerts",
     "maxBackups": 20
   },
   "dashboards": [],

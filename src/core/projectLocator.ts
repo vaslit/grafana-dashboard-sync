@@ -7,6 +7,7 @@ const DEFAULT_LAYOUT = {
   dashboardsDir: "dashboards",
   backupsDir: "backups",
   rendersDir: "renders",
+  alertsDir: "alerts",
 } as const;
 
 const IGNORED_DIR_NAMES = new Set([
@@ -23,11 +24,12 @@ const MAX_SCAN_DEPTH = 5;
 const DEFAULT_MAX_BACKUPS = 20;
 
 interface ProjectConfigFile {
-  version: 4;
+  version: 5;
   layout?: {
     dashboardsDir?: string;
     backupsDir?: string;
     rendersDir?: string;
+    alertsDir?: string;
     maxBackups?: number;
   };
 }
@@ -41,6 +43,7 @@ export interface ProjectLayout {
   dashboardsDir: string;
   backupsDir: string;
   rendersDir: string;
+  alertsDir: string;
   maxBackups: number;
 }
 
@@ -111,6 +114,12 @@ function buildProjectLayout(
       DEFAULT_LAYOUT.rendersDir,
       "rendersDir",
     ),
+    alertsDir: resolveRelativePath(
+      projectRootPath,
+      layoutConfig?.alertsDir,
+      DEFAULT_LAYOUT.alertsDir,
+      "alertsDir",
+    ),
     maxBackups:
       typeof layoutConfig?.maxBackups === "number" &&
       Number.isInteger(layoutConfig.maxBackups) &&
@@ -132,7 +141,7 @@ async function loadProjectConfig(configPath: string): Promise<ProjectConfigFile>
       throw new Error(`layout in ${PROJECT_CONFIG_FILE} must be an object when provided.`);
     }
     const layout = config.layout as Record<string, unknown>;
-    const layoutStringFields = ["dashboardsDir", "backupsDir", "rendersDir"] as const;
+    const layoutStringFields = ["dashboardsDir", "backupsDir", "rendersDir", "alertsDir"] as const;
     for (const field of layoutStringFields) {
       const value = layout[field];
       if (value !== undefined && typeof value !== "string") {
@@ -147,7 +156,7 @@ async function loadProjectConfig(configPath: string): Promise<ProjectConfigFile>
     }
   }
 
-  if (config.version !== 4) {
+  if (config.version !== 5) {
     throw new Error(`Unsupported ${PROJECT_CONFIG_FILE} version: ${String(config.version)}.`);
   }
 

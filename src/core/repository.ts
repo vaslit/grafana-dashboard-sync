@@ -317,11 +317,12 @@ function emptyDashboardTargetState(): DashboardOverrideFile {
 
 function defaultWorkspaceConfig(layout: ProjectLayout): WorkspaceProjectConfig {
   return {
-    version: 4,
+    version: 5,
     layout: {
       dashboardsDir: toRelativeConfigPath(layout.projectRootPath, layout.dashboardsDir),
       backupsDir: toRelativeConfigPath(layout.projectRootPath, layout.backupsDir),
       rendersDir: toRelativeConfigPath(layout.projectRootPath, layout.rendersDir),
+      alertsDir: toRelativeConfigPath(layout.projectRootPath, layout.alertsDir),
       maxBackups: layout.maxBackups,
     },
     dashboards: [],
@@ -334,7 +335,7 @@ function validateWorkspaceProjectConfig(config: WorkspaceProjectConfig, filePath
   if (!config || typeof config !== "object" || Array.isArray(config)) {
     throw new Error(`Invalid workspace config: ${filePath}`);
   }
-  if (config.version !== 4) {
+  if (config.version !== 5) {
     throw new Error(`Invalid workspace config version: ${filePath}`);
   }
   if (!config.layout || typeof config.layout !== "object" || Array.isArray(config.layout)) {
@@ -344,6 +345,7 @@ function validateWorkspaceProjectConfig(config: WorkspaceProjectConfig, filePath
     dashboardsDir: config.layout.dashboardsDir,
     backupsDir: config.layout.backupsDir,
     rendersDir: config.layout.rendersDir,
+    alertsDir: config.layout.alertsDir,
   })) {
     if (typeof value !== "string" || !value.trim()) {
       throw new Error(`Invalid workspace config ${key}: ${filePath}`);
@@ -680,6 +682,7 @@ export class ProjectRepository {
   readonly dashboardsDir: string;
   readonly backupsDir: string;
   readonly rendersDir: string;
+  readonly alertsDir: string;
   readonly maxBackups: number;
   private readonly resolveToken: (instanceName?: string) => Promise<string | undefined>;
   private readonly resolvePassword: (instanceName?: string) => Promise<string | undefined>;
@@ -693,6 +696,7 @@ export class ProjectRepository {
     this.dashboardsDir = layout.dashboardsDir;
     this.backupsDir = layout.backupsDir;
     this.rendersDir = layout.rendersDir;
+    this.alertsDir = layout.alertsDir;
     this.maxBackups = layout.maxBackups;
     this.resolveToken = options?.resolveToken ?? (async () => undefined);
     this.resolvePassword = options?.resolvePassword ?? (async () => undefined);
@@ -702,6 +706,7 @@ export class ProjectRepository {
     await ensureDir(this.dashboardsDir);
     await ensureDir(this.backupsDir);
     await ensureDir(this.rendersDir);
+    await ensureDir(this.alertsDir);
   }
 
   dashboardPath(entry: DashboardManifestEntry): string {
@@ -721,7 +726,7 @@ export class ProjectRepository {
   }
 
   alertsRootPath(instanceName: string, targetName: string): string {
-    return path.join(this.projectRootPath, "alerts", instanceName, targetName);
+    return path.join(this.alertsDir, instanceName, targetName);
   }
 
   alertsManifestPath(instanceName: string, targetName: string): string {
@@ -828,6 +833,7 @@ export class ProjectRepository {
         dashboardsDir: this.dashboardsDir,
         backupsDir: this.backupsDir,
         rendersDir: this.rendersDir,
+        alertsDir: this.alertsDir,
         maxBackups: this.maxBackups,
       });
     }

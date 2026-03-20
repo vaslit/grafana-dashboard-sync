@@ -342,6 +342,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           dashboardsDir: nextRepository.dashboardsDir,
           backupsDir: nextRepository.backupsDir,
           rendersDir: nextRepository.rendersDir,
+          alertsDir: nextRepository.alertsDir,
           maxBackups: nextRepository.maxBackups,
         },
         {

@@ -53,6 +53,7 @@ project-root/
 
 - отдельная filesystem-based папка `instances/` больше не используется
 - instances, targets, dashboards и datasource mappings хранятся в `.grafana-dashboard-workspace.json`
+- path для alerts тоже задается там, через `layout.alertsDir`
 - `GRAFANA_URL` и `GRAFANA_USERNAME` сохраняются в config файла проекта
 - token и password хранятся в VS Code Secret Storage
 
