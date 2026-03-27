@@ -123,6 +123,141 @@ function sanitizeDashboardForStorage(dashboard: Record<string, unknown>): Record
   return nextDashboard;
 }
 
+function comparableVariableValue(value: unknown): string | undefined {
+  if (value === null) {
+    return "null";
+  }
+
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  return undefined;
+}
+
+function selectedCustomVariableValues(variable: Record<string, unknown>): string[] {
+  const current = variable.current;
+  if (!current || typeof current !== "object" || Array.isArray(current)) {
+    return [];
+  }
+
+  const currentRecord = current as Record<string, unknown>;
+  const currentValue = currentRecord.value ?? currentRecord.text;
+  if (Array.isArray(currentValue)) {
+    return currentValue
+      .map((item) => comparableVariableValue(item))
+      .filter((item): item is string => item !== undefined);
+  }
+
+  const comparable = comparableVariableValue(currentValue);
+  return comparable ? [comparable] : [];
+}
+
+function selectedCustomOptionValues(variable: Record<string, unknown>): string[] {
+  if (!Array.isArray(variable.options)) {
+    return [];
+  }
+
+  return variable.options
+    .filter((option) => option && typeof option === "object" && !Array.isArray(option) && (option as { selected?: unknown }).selected === true)
+    .map((option) => {
+      const optionRecord = option as Record<string, unknown>;
+      return comparableVariableValue(optionRecord.value ?? optionRecord.text);
+    })
+    .filter((item): item is string => item !== undefined);
+}
+
+function normalizeCustomVariableFromQuery(variable: Record<string, unknown>): Record<string, unknown> {
+  if (variable.type !== "custom" || typeof variable.query !== "string") {
+    return variable;
+  }
+
+  const queryValues = [...new Set(variable.query.split(",").map((item) => item.trim()).filter(Boolean))];
+  if (queryValues.length === 0) {
+    return variable;
+  }
+
+  const existingOptions = new Map<string, Record<string, unknown>>();
+  if (Array.isArray(variable.options)) {
+    for (const option of variable.options) {
+      if (!option || typeof option !== "object" || Array.isArray(option)) {
+        continue;
+      }
+
+      const optionRecord = option as Record<string, unknown>;
+      const comparable = comparableVariableValue(optionRecord.value ?? optionRecord.text);
+      if (!comparable || existingOptions.has(comparable)) {
+        continue;
+      }
+      existingOptions.set(comparable, optionRecord);
+    }
+  }
+
+  const nextOptions = queryValues.map((value) => {
+    const existing = existingOptions.get(value);
+    return {
+      ...(existing ?? {
+        text: value,
+        value,
+      }),
+      text: typeof existing?.text === "string" ? existing.text : value,
+      value: comparableVariableValue(existing?.value ?? existing?.text) === value ? (existing?.value ?? value) : value,
+      selected: false,
+    };
+  });
+  const allowedValues = new Set(queryValues);
+
+  let selectedValues = selectedCustomVariableValues(variable).filter((value) => allowedValues.has(value));
+  if (selectedValues.length === 0) {
+    selectedValues = selectedCustomOptionValues(variable).filter((value) => allowedValues.has(value));
+  }
+  if (selectedValues.length === 0) {
+    selectedValues = [queryValues[0]!];
+  }
+  selectedValues = [...new Set(selectedValues)];
+
+  const finalizedOptions = nextOptions.map((option) => ({
+    ...option,
+    selected: selectedValues.includes(comparableVariableValue(option.value ?? option.text) ?? ""),
+  }));
+  const selectedOptions = finalizedOptions.filter((option) =>
+    selectedValues.includes(comparableVariableValue(option.value ?? option.text) ?? ""),
+  );
+  const currentOptions = selectedOptions.length > 0 ? selectedOptions : [finalizedOptions[0]!];
+
+  return {
+    ...variable,
+    current:
+      currentOptions.length > 1
+        ? {
+            text: currentOptions.map((option) => option.text),
+            value: currentOptions.map((option) => option.value),
+          }
+        : {
+            text: currentOptions[0]!.text,
+            value: currentOptions[0]!.value,
+          },
+    options: finalizedOptions,
+  };
+}
+
+function normalizePulledDashboardVariables(dashboard: Record<string, unknown>): Record<string, unknown> {
+  const nextDashboard = structuredClone(dashboard);
+  const templating = nextDashboard.templating;
+  if (!templating || typeof templating !== "object" || Array.isArray(templating)) {
+    return nextDashboard;
+  }
+
+  const list = Array.isArray((templating as { list?: unknown }).list) ? (templating as { list: unknown[] }).list : [];
+  (templating as { list: unknown[] }).list = list.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return item;
+    }
+    return normalizeCustomVariableFromQuery(item as Record<string, unknown>);
+  });
+  return nextDashboard;
+}
+
 function normalizeFolderPath(pathValue: string | undefined): string | undefined {
   const normalized = (pathValue ?? "")
     .split("/")
@@ -1887,7 +2022,7 @@ export class DashboardService {
       {
         ...normalizeDashboardDatasourceRefsFromCatalog(
           {
-            ...sanitizeDashboardForStorage(response.dashboard),
+            ...normalizePulledDashboardVariables(sanitizeDashboardForStorage(response.dashboard)),
             uid: entry.uid,
           },
           catalog,
@@ -2366,7 +2501,7 @@ export class DashboardService {
     const response = await client.getDashboardByUid(effectiveDashboardUid);
     const normalizedDashboard = normalizeDashboardDatasourceRefsFromCatalog(
       {
-        ...sanitizeDashboardForStorage(response.dashboard),
+        ...normalizePulledDashboardVariables(sanitizeDashboardForStorage(response.dashboard)),
         uid: entry.uid,
       },
       await this.repository.readDatasourceCatalog(),
@@ -2709,7 +2844,7 @@ export class DashboardService {
       }
 
       const response = await client.getDashboardByUid(effectiveDashboardUid);
-      const pulledDashboard = sanitizeDashboardForStorage(response.dashboard);
+      const pulledDashboard = normalizePulledDashboardVariables(sanitizeDashboardForStorage(response.dashboard));
 
       const datasourceDescriptors = buildDashboardDatasourceDescriptors(pulledDashboard, datasources);
       const nextCatalogState = mergePulledDatasourceCatalog(

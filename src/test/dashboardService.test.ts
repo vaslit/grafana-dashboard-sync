@@ -512,6 +512,97 @@ test("pullDashboards does not create a new revision when only managed constant o
   });
 });
 
+test("pullDashboards normalizes stale custom variable state from query values", async () => {
+  await withTempProject(async (repository, entry) => {
+    await repository.createInstance("prod");
+    await repository.writeJsonFile(repository.dashboardPath(entry), {
+      title: "Status",
+      uid: entry.uid,
+    });
+
+    const client = new MockGrafanaClient(
+      {
+        dashboard: {
+          title: "Status",
+          uid: entry.uid,
+          templating: {
+            list: [
+              {
+                current: {
+                  text: "АПУ-1",
+                  value: "АПУ-1",
+                },
+                hide: 2,
+                name: "APU_investigation",
+                options: [
+                  {
+                    selected: false,
+                    text: "Все",
+                    value: "Все",
+                  },
+                  {
+                    selected: true,
+                    text: "АПУ-1",
+                    value: "АПУ-1",
+                  },
+                  {
+                    selected: false,
+                    text: "АПУ-2",
+                    value: "АПУ-2",
+                  },
+                  {
+                    selected: false,
+                    text: "АПУ-3",
+                    value: "АПУ-3",
+                  },
+                ],
+                query: " Все, Dolina-1, Dolina-2, Lorenz Pan-3",
+                type: "custom",
+              },
+            ],
+          },
+        },
+        meta: {},
+      },
+      [],
+      () => {},
+    );
+    const service = new DashboardService(repository, logger(), async () => client);
+
+    await service.pullDashboards([entry], "prod", "default");
+
+    const dashboard = await repository.readJsonFile<Record<string, unknown>>(repository.dashboardPath(entry));
+    const variable = ((dashboard.templating as { list: Array<Record<string, unknown>> }).list)[0]!;
+
+    assert.deepEqual(variable.current, {
+      text: "Все",
+      value: "Все",
+    });
+    assert.deepEqual(variable.options, [
+      {
+        selected: true,
+        text: "Все",
+        value: "Все",
+      },
+      {
+        selected: false,
+        text: "Dolina-1",
+        value: "Dolina-1",
+      },
+      {
+        selected: false,
+        text: "Dolina-2",
+        value: "Dolina-2",
+      },
+      {
+        selected: false,
+        text: "Lorenz Pan-3",
+        value: "Lorenz Pan-3",
+      },
+    ]);
+  });
+});
+
 test("pullDashboards accepts mismatched remote dashboard uid and normalizes the local snapshot uid", async () => {
   await withTempProject(async (repository, entry) => {
     await repository.createInstance("prod");
