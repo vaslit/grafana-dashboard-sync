@@ -1395,10 +1395,12 @@ test("listDashboardRevisions initializes version history from working copy", asy
     );
 
     const revisions = await service.listDashboardRevisions(entry);
+    const index = await repository.readDashboardVersionIndex(entry);
 
     assert.equal(revisions.length, 1);
     assert.equal(revisions[0]?.isCheckedOut, true);
-    assert.equal((await repository.readDashboardVersionIndex(entry))?.checkedOutRevisionId, revisions[0]?.record.id);
+    assert.equal(index?.checkedOutRevisionId, revisions[0]?.record.id);
+    assert.equal(index?.revisions[0]?.snapshotPath, repository.dashboardRevisionSnapshotMetadataPath(entry, revisions[0]!.record.id));
     assert.ok(await repository.readDashboardRevisionSnapshot(entry, revisions[0]!.record.id));
   });
 });

@@ -1784,7 +1784,7 @@ export class DashboardService {
           createdAt: new Date().toISOString(),
           contentHash,
           templateHash,
-          snapshotPath: this.repository.dashboardRevisionSnapshotPath(entry, id),
+          snapshotPath: this.repository.dashboardRevisionSnapshotMetadataPath(entry, id),
           ...(snapshot.folderPath ? { baseFolderPath: snapshot.folderPath } : {}),
           source: {
             kind: "migration",
@@ -1861,7 +1861,7 @@ export class DashboardService {
       createdAt: new Date().toISOString(),
       contentHash,
       templateHash,
-      snapshotPath: this.repository.dashboardRevisionSnapshotPath(entry, id),
+      snapshotPath: this.repository.dashboardRevisionSnapshotMetadataPath(entry, id),
       ...(snapshot.folderPath ? { baseFolderPath: snapshot.folderPath } : {}),
       source,
     };

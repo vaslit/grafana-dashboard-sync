@@ -823,6 +823,10 @@ export class ProjectRepository {
     return path.join(this.dashboardVersionsDirPath(entry), `${revisionId}.json`);
   }
 
+  dashboardRevisionSnapshotMetadataPath(entry: DashboardManifestEntry, revisionId: string): string {
+    return path.relative(this.projectRootPath, this.dashboardRevisionSnapshotPath(entry, revisionId)).replace(/\\/g, "/");
+  }
+
   dashboardOverrideTargetKey(instanceName: string, targetName: string): string {
     return `${instanceName}/${targetName}`;
   }
@@ -1234,7 +1238,7 @@ export class ProjectRepository {
         ...currentVersionIndex,
         revisions: currentVersionIndex.revisions.map((revision) => ({
           ...revision,
-          snapshotPath: this.dashboardRevisionSnapshotPath(nextEntry, revision.id),
+          snapshotPath: this.dashboardRevisionSnapshotMetadataPath(nextEntry, revision.id),
         })),
       };
 
