@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.9.13 - 2026-04-13
+
+- Switched revision `snapshotPath` metadata to project-relative paths so revision indexes remain portable across machines and workspaces.
+
 ## 0.9.12 - 2026-04-13
 
 - Moved dashboard revision storage into per-dashboard folders under `.versions/<dashboard-uid>/` so dashboards that share a Grafana folder no longer reuse each other's revision history.
