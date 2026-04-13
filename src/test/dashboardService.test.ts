@@ -358,6 +358,91 @@ test("pullDashboards creates a new dashboard file when the manifest entry has no
   });
 });
 
+test("buildOverrideEditorVariables keeps revisions isolated for dashboards in the same folder", async () => {
+  await withTempProject(async (repository, entry) => {
+    const secondEntry: DashboardManifestEntry = {
+      name: "other-status",
+      uid: "uid-2",
+      path: "integration/other.json",
+    };
+    await repository.saveManifest({ dashboards: [entry, secondEntry] });
+    await repository.createInstance("prod");
+    await repository.writeJsonFile(repository.dashboardPath(entry), {
+      title: "Status",
+      uid: entry.uid,
+      templating: {
+        list: [
+          {
+            name: "site",
+            type: "constant",
+            current: {
+              text: "LUZ",
+              value: "LUZ",
+            },
+            query: "LUZ",
+          },
+        ],
+      },
+    });
+    await repository.writeJsonFile(repository.dashboardPath(secondEntry), {
+      title: "Other",
+      uid: secondEntry.uid,
+      templating: {
+        list: [
+          {
+            name: "pallet",
+            type: "constant",
+            current: {
+              text: "16036050",
+              value: "16036050",
+            },
+            query: "16036050",
+          },
+        ],
+      },
+    });
+
+    const service = new DashboardService(
+      repository,
+      logger(),
+      async () =>
+        new MockGrafanaClient(
+          {
+            dashboard: {
+              title: "unused",
+              uid: entry.uid,
+            },
+            meta: {},
+          },
+          [],
+          () => {},
+        ),
+    );
+
+    const firstRevision = (await service.listDashboardRevisions(entry))[0]!.record;
+    const secondRevision = (await service.listDashboardRevisions(secondEntry))[0]!.record;
+    await repository.saveTargetOverrideFile("prod", "default", secondEntry, {
+      currentRevisionId: firstRevision.id,
+      revisionStates: {
+        [firstRevision.id]: {
+          variableOverrides: {},
+          datasourceBindings: {},
+        },
+      },
+    });
+
+    const variables = await service.buildOverrideEditorVariables("prod", "default", secondEntry);
+    assert.deepEqual(
+      variables.map((variable) => variable.name),
+      ["pallet"],
+    );
+
+    const savedTargetState = await repository.readTargetOverrideFile("prod", "default", secondEntry);
+    assert.equal(savedTargetState?.currentRevisionId, secondRevision.id);
+    assert.deepEqual(Object.keys(savedTargetState?.revisionStates ?? {}), [secondRevision.id]);
+  });
+});
+
 test("pullDashboards preserves base folder path when dashboard has explicit folderPath overrides", async () => {
   await withTempProject(async (repository, entry) => {
     await repository.createInstance("prod");

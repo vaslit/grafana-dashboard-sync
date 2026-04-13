@@ -102,6 +102,35 @@ test("repository resolves dashboard, override and folder metadata paths", async 
       repository.folderMetaPathForEntry(entry),
       path.join(repository.dashboardsDir, "integration", ".folder.json"),
     );
+    assert.equal(
+      repository.dashboardVersionIndexPath(entry),
+      path.join(repository.dashboardsDir, "integration", ".versions", "uid-1", "index.json"),
+    );
+    assert.equal(
+      repository.dashboardRevisionSnapshotPath(entry, "rev-1"),
+      path.join(repository.dashboardsDir, "integration", ".versions", "uid-1", "rev-1.json"),
+    );
+  });
+});
+
+test("repository separates version storage for dashboards in the same folder", async () => {
+  await withTempProject(async (_rootPath, repository) => {
+    const entry = {
+      name: "sync-status",
+      uid: "uid-1",
+      path: "integration/status.json",
+    };
+    const secondEntry = {
+      name: "other-status",
+      uid: "uid-2",
+      path: "integration/other.json",
+    };
+
+    assert.notEqual(repository.dashboardVersionIndexPath(entry), repository.dashboardVersionIndexPath(secondEntry));
+    assert.notEqual(
+      repository.dashboardRevisionSnapshotPath(entry, "rev-1"),
+      repository.dashboardRevisionSnapshotPath(secondEntry, "rev-1"),
+    );
   });
 });
 

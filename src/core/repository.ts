@@ -808,11 +808,15 @@ export class ProjectRepository {
   }
 
   dashboardVersionsDirPath(entry: DashboardManifestEntry): string {
-    return path.join(path.dirname(this.dashboardPath(entry)), ".versions");
+    return path.join(
+      path.dirname(this.dashboardPath(entry)),
+      ".versions",
+      sanitizeFileSegment(this.dashboardOverrideDashboardKey(entry)),
+    );
   }
 
   dashboardVersionIndexPath(entry: DashboardManifestEntry): string {
-    return path.join(path.dirname(this.dashboardPath(entry)), ".versions.json");
+    return path.join(this.dashboardVersionsDirPath(entry), "index.json");
   }
 
   dashboardRevisionSnapshotPath(entry: DashboardManifestEntry, revisionId: string): string {
@@ -1797,11 +1801,7 @@ export class ProjectRepository {
 
   async deleteDashboardVersionHistory(entry: DashboardManifestEntry): Promise<string[]> {
     const removedPaths: string[] = [];
-    const indexPath = this.dashboardVersionIndexPath(entry);
     const versionsDir = this.dashboardVersionsDirPath(entry);
-    if (await removeFileIfExists(indexPath)) {
-      removedPaths.push(indexPath);
-    }
     if (await exists(versionsDir)) {
       await fs.rm(versionsDir, { recursive: true, force: true });
       removedPaths.push(versionsDir);
