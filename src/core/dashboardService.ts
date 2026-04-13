@@ -1603,15 +1603,14 @@ export class DashboardService {
     sourceRepository: ProjectRepository = this.repository,
   ): Promise<DashboardTargetState> {
     const existingState = await sourceRepository.readTargetOverrideFile(instanceName, targetName, entry);
-    const existingIndex = await this.repository.readDashboardVersionIndex(entry);
+    const versionIndex = await this.ensureDashboardVersionIndex(entry);
+    const validRevisionIds = new Set(versionIndex.revisions.map((candidate) => candidate.id));
     const checkedOutRevision =
-      existingIndex?.revisions.find((candidate) => candidate.id === existingIndex.checkedOutRevisionId) ??
-      existingIndex?.revisions[0] ??
-      (await this.currentCheckedOutRevision(entry)) ??
-      (await this.ensureWorkingCopyCheckedOutRevision(entry, { kind: "migration" }));
-    const revision = existingState?.currentRevisionId
-      ? (await this.revisionById(entry, existingState.currentRevisionId)) ?? checkedOutRevision
-      : checkedOutRevision;
+      versionIndex.revisions.find((candidate) => candidate.id === versionIndex.checkedOutRevisionId) ?? versionIndex.revisions[0];
+    const existingRevision = existingState?.currentRevisionId
+      ? versionIndex.revisions.find((candidate) => candidate.id === existingState.currentRevisionId)
+      : undefined;
+    const revision = existingRevision ?? checkedOutRevision;
     if (!revision) {
       throw new Error(`Could not resolve revision for ${selectorNameForEntry(entry)}.`);
     }
@@ -1623,14 +1622,14 @@ export class DashboardService {
 
     const folderMeta = await sourceRepository.readFolderMetadata(entry);
     const nextState: DashboardTargetState = {
-      ...(existingState?.currentRevisionId ? { currentRevisionId: existingState.currentRevisionId } : { currentRevisionId: revision.id }),
+      currentRevisionId: revision.id,
       ...(existingState?.dashboardUid ? { dashboardUid: existingState.dashboardUid } : {}),
       ...(normalizeFolderPath(existingState?.folderPath ?? folderMeta?.path ?? snapshot.folderPath)
         ? { folderPath: normalizeFolderPath(existingState?.folderPath ?? folderMeta?.path ?? snapshot.folderPath) }
         : {}),
-      revisionStates: {
-        ...(existingState?.revisionStates ?? {}),
-      },
+      revisionStates: Object.fromEntries(
+        Object.entries(existingState?.revisionStates ?? {}).filter(([revisionId]) => validRevisionIds.has(revisionId)),
+      ),
     };
 
     if (stableJsonStringify(nextState) !== stableJsonStringify(existingState ?? {})) {

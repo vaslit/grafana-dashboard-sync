@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.9.12 - 2026-04-13
+
+- Moved dashboard revision storage into per-dashboard folders under `.versions/<dashboard-uid>/` so dashboards that share a Grafana folder no longer reuse each other's revision history.
+- Fixed target state normalization to drop stale revision ids and rebind targets to a valid revision for the selected dashboard.
+
 ## 0.9.10 - 2026-03-20
 
 - Switched alerts to a tracked model with `Add Alerts...`, tracked-only pull, and bulk pull/deploy commands for target, instance, and all instances scopes.
