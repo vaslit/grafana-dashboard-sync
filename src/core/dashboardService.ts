@@ -24,6 +24,7 @@ import {
   normalizeCurrentForStorage,
   parseOverrideInput,
   serializeOverrideValue,
+  supportedVariableTypes,
 } from "./overrides";
 import { DEFAULT_DEPLOYMENT_TARGET, ProjectRepository } from "./repository";
 import {
@@ -114,6 +115,8 @@ interface AlertDatasourceRef {
   datasourceName?: string;
   datasourceType?: string;
 }
+
+const MANAGED_VARIABLE_TYPES = new Set(supportedVariableTypes());
 
 function sanitizeDashboardForStorage(dashboard: Record<string, unknown>): Record<string, unknown> {
   const nextDashboard = structuredClone(dashboard);
@@ -254,6 +257,34 @@ function normalizePulledDashboardVariables(dashboard: Record<string, unknown>): 
       return item;
     }
     return normalizeCustomVariableFromQuery(item as Record<string, unknown>);
+  });
+  return nextDashboard;
+}
+
+function clearDynamicVariableRuntimeState(dashboard: Record<string, unknown>): Record<string, unknown> {
+  const nextDashboard = structuredClone(dashboard);
+  const templating = nextDashboard.templating;
+  if (!templating || typeof templating !== "object" || Array.isArray(templating)) {
+    return nextDashboard;
+  }
+
+  const list = Array.isArray((templating as { list?: unknown }).list) ? (templating as { list: unknown[] }).list : [];
+  (templating as { list: unknown[] }).list = list.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return item;
+    }
+
+    const variable = item as Record<string, unknown>;
+    const type = typeof variable.type === "string" ? variable.type : undefined;
+    if (!type || MANAGED_VARIABLE_TYPES.has(type)) {
+      return variable;
+    }
+
+    return {
+      ...variable,
+      current: {},
+      options: [],
+    };
   });
   return nextDashboard;
 }
@@ -1537,7 +1568,7 @@ export class DashboardService {
     managedVariableNames: ReadonlySet<string>,
     baseUid: string,
   ): Record<string, unknown> {
-    const nextDashboard = structuredClone(dashboard);
+    const nextDashboard = clearDynamicVariableRuntimeState(dashboard);
     nextDashboard.uid = baseUid;
     if (managedVariableNames.size === 0) {
       return nextDashboard;
@@ -2018,8 +2049,8 @@ export class DashboardService {
     const response = await client.getDashboardByUid(effectiveDashboardUid);
     const catalog = await this.repository.readDatasourceCatalog();
     const normalizedDashboard = this.renameDatasourceBindings(
-      {
-        ...normalizeDashboardDatasourceRefsFromCatalog(
+      clearDynamicVariableRuntimeState(
+        normalizeDashboardDatasourceRefsFromCatalog(
           {
             ...normalizePulledDashboardVariables(sanitizeDashboardForStorage(response.dashboard)),
             uid: entry.uid,
@@ -2027,7 +2058,7 @@ export class DashboardService {
           catalog,
           instanceName,
         ),
-      },
+      ),
       targetRevision.revisionState.datasourceBindings,
     );
     return {
@@ -2498,13 +2529,15 @@ export class DashboardService {
     }
 
     const response = await client.getDashboardByUid(effectiveDashboardUid);
-    const normalizedDashboard = normalizeDashboardDatasourceRefsFromCatalog(
-      {
-        ...normalizePulledDashboardVariables(sanitizeDashboardForStorage(response.dashboard)),
-        uid: entry.uid,
-      },
-      await this.repository.readDatasourceCatalog(),
-      instanceName,
+    const normalizedDashboard = clearDynamicVariableRuntimeState(
+      normalizeDashboardDatasourceRefsFromCatalog(
+        {
+          ...normalizePulledDashboardVariables(sanitizeDashboardForStorage(response.dashboard)),
+          uid: entry.uid,
+        },
+        await this.repository.readDatasourceCatalog(),
+        instanceName,
+      ),
     );
     const folderPath =
       response.meta.folderUid ? buildFolderPathByUid(response.meta.folderUid, folders) : undefined;
@@ -2857,10 +2890,10 @@ export class DashboardService {
         datasourceCatalog = nextCatalogState.catalog;
         datasourceCatalogChanged = true;
       }
-      const dashboard = {
+      const dashboard = clearDynamicVariableRuntimeState({
         ...normalizeDashboardDatasourceRefs(pulledDashboard, nextCatalogState.sourceNamesByUid),
         uid: entry.uid,
-      };
+      });
       const pulledFolderPath =
         response.meta.folderUid
           ? buildFolderPathByUid(response.meta.folderUid, folders) ||
@@ -3512,7 +3545,9 @@ export class DashboardService {
         `Datasource mappings are missing for ${selectorNameForEntry(entry)} on ${instanceName}: ${missingMappings.join(", ")}`,
       );
     }
-    return applyDatasourceMappingsToDashboard(dashboardWithVariableOverrides, datasourceCatalog, instanceName);
+    return clearDynamicVariableRuntimeState(
+      applyDatasourceMappingsToDashboard(dashboardWithVariableOverrides, datasourceCatalog, instanceName),
+    );
   }
 
   private async ensureFolder(

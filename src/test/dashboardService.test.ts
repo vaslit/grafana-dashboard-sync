@@ -688,6 +688,147 @@ test("pullDashboards normalizes stale custom variable state from query values", 
   });
 });
 
+test("pullDashboards clears dynamic variable runtime state after datasource catalog extraction", async () => {
+  await withTempProject(async (repository, entry) => {
+    await repository.createInstance("prod");
+
+    const client = new MockGrafanaClient(
+      {
+        dashboard: {
+          title: "Goodsout",
+          uid: entry.uid,
+          templating: {
+            list: [
+              {
+                current: {
+                  text: "016103914",
+                  value: "016103914",
+                },
+                datasource: {
+                  type: "haohanyang-mongodb-datasource",
+                  uid: "mongo-luz",
+                },
+                definition: "",
+                name: "swap_id",
+                options: [
+                  {
+                    selected: true,
+                    text: "016103914",
+                    value: "016103914",
+                  },
+                ],
+                query: {
+                  collection: "pallet",
+                  queryText: "[{\"$match\":{\"id\":{\"$eq\":\"$PalletID\"}}}]",
+                },
+                refresh: 1,
+                regex: "",
+                type: "query",
+              },
+            ],
+          },
+        },
+        meta: {},
+      },
+      [],
+      () => {},
+      [{ uid: "mongo-luz", name: "mongodb_luz", type: "haohanyang-mongodb-datasource" }],
+    );
+    const service = new DashboardService(repository, logger(), async () => client);
+
+    await service.pullDashboards([entry], "prod", "default");
+
+    const dashboard = await repository.readJsonFile<Record<string, unknown>>(repository.dashboardPath(entry));
+    const variable = ((dashboard.templating as { list: Array<Record<string, unknown>> }).list)[0]!;
+
+    assert.deepEqual(variable.current, {});
+    assert.deepEqual(variable.options, []);
+    assert.deepEqual(variable.datasource, {
+      type: "haohanyang-mongodb-datasource",
+      uid: "mongodb_luz",
+    });
+    assert.equal(JSON.stringify(dashboard).includes("016103914"), false);
+
+    const catalog = await repository.readDatasourceCatalog();
+    assert.deepEqual(catalog.datasources.mongodb_luz?.instances.prod, {
+      name: "mongodb_luz",
+      uid: "mongo-luz",
+    });
+  });
+});
+
+test("pullDashboards does not create a new revision when only dynamic variable runtime state changes", async () => {
+  await withTempProject(async (repository, entry) => {
+    await repository.createInstance("prod");
+
+    const swapIdVariable = {
+      current: {
+        text: "016103914",
+        value: "016103914",
+      },
+      datasource: {
+        type: "haohanyang-mongodb-datasource",
+        uid: "mongo-luz",
+      },
+      name: "swap_id",
+      options: [
+        {
+          selected: true,
+          text: "016103914",
+          value: "016103914",
+        },
+      ],
+      query: {
+        collection: "pallet",
+        queryText: "[{\"$match\":{\"id\":{\"$eq\":\"$PalletID\"}}}]",
+      },
+      type: "query",
+    };
+    const dashboardResponse: GrafanaDashboardResponse = {
+      dashboard: {
+        title: "Goodsout",
+        uid: entry.uid,
+        templating: {
+          list: [swapIdVariable],
+        },
+      },
+      meta: {},
+    };
+
+    const client = new MockGrafanaClient(
+      dashboardResponse,
+      [],
+      () => {},
+      [{ uid: "mongo-luz", name: "mongodb_luz", type: "haohanyang-mongodb-datasource" }],
+    );
+    const service = new DashboardService(repository, logger(), async () => client);
+
+    await service.pullDashboards([entry], "prod", "default");
+    const initialIndex = await repository.readDashboardVersionIndex(entry);
+
+    swapIdVariable.current = {
+      text: "999999999",
+      value: "999999999",
+    };
+    swapIdVariable.options = [
+      {
+        selected: true,
+        text: "999999999",
+        value: "999999999",
+      },
+    ];
+
+    await service.pullDashboards([entry], "prod", "default");
+
+    const nextIndex = await repository.readDashboardVersionIndex(entry);
+    assert.equal(nextIndex?.revisions.length, 1);
+    assert.equal(nextIndex?.checkedOutRevisionId, initialIndex?.checkedOutRevisionId);
+
+    const dashboard = await repository.readJsonFile<Record<string, unknown>>(repository.dashboardPath(entry));
+    assert.equal(JSON.stringify(dashboard).includes("999999999"), false);
+  });
+});
+
 test("pullDashboards accepts mismatched remote dashboard uid and normalizes the local snapshot uid", async () => {
   await withTempProject(async (repository, entry) => {
     await repository.createInstance("prod");
@@ -1784,6 +1925,87 @@ test("renderDashboards creates persisted render artifacts", async () => {
       await repository.readTextFileIfExists(repository.renderDashboardPath("prod", "default", entry)),
       "{\n  \"datasource\": {\n    \"type\": \"prometheus\",\n    \"uid\": \"prod-datasource\"\n  },\n  \"title\": \"Status\",\n  \"uid\": \"uid-1\"\n}\n",
     );
+  });
+});
+
+test("renderDashboards clears stale dynamic variable runtime state and maps its datasource", async () => {
+  await withTempProject(async (repository, entry) => {
+    await repository.createInstance("rostov");
+    await repository.saveInstanceEnvValues("rostov", {
+      GRAFANA_URL: "http://rostov",
+    });
+    await repository.saveDatasourceCatalog({
+      datasources: {
+        mongodb_luz: {
+          instances: {
+            rostov: {
+              uid: "mongo-rostov",
+              name: "mongodb_rostov",
+            },
+          },
+        },
+      },
+    });
+    await repository.writeJsonFile(repository.dashboardPath(entry), {
+      title: "Goodsout",
+      uid: entry.uid,
+      templating: {
+        list: [
+          {
+            current: {
+              text: "016103914",
+              value: "016103914",
+            },
+            datasource: {
+              type: "haohanyang-mongodb-datasource",
+              uid: "mongodb_luz",
+            },
+            name: "swap_id",
+            options: [
+              {
+                selected: true,
+                text: "016103914",
+                value: "016103914",
+              },
+            ],
+            query: {
+              collection: "pallet",
+              queryText: "[{\"$match\":{\"id\":{\"$eq\":\"$PalletID\"}}}]",
+            },
+            type: "query",
+          },
+        ],
+      },
+    });
+
+    const service = new DashboardService(
+      repository,
+      logger(),
+      async () =>
+        new MockGrafanaClient(
+          {
+            dashboard: {
+              title: "unused",
+              uid: entry.uid,
+            },
+            meta: {},
+          },
+          [],
+          () => {},
+        ),
+    );
+
+    await service.renderDashboards([entry], "rostov", "default", "dashboard");
+
+    const rendered = await repository.readJsonFile<Record<string, unknown>>(repository.renderDashboardPath("rostov", "default", entry));
+    const variable = ((rendered.templating as { list: Array<Record<string, unknown>> }).list)[0]!;
+    assert.deepEqual(variable.current, {});
+    assert.deepEqual(variable.options, []);
+    assert.deepEqual(variable.datasource, {
+      type: "haohanyang-mongodb-datasource",
+      uid: "mongo-rostov",
+    });
+    assert.equal(JSON.stringify(rendered).includes("016103914"), false);
   });
 });
 
